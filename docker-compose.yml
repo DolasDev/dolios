@@ -1,3 +1,8 @@
+# Host stack: Postgres only.
+#
+# `hermes-agent` runs natively on the host (see README), and the LLM lives on
+# the dolo-llm machine via compose.dolo-llm.yml. Postgres is here for future
+# state — agent memory, MCP tool servers, etc. — and starts empty.
 services:
   db:
     image: postgres:16
@@ -15,31 +20,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  hermes:
-    build: ./services/hermes
-    restart: unless-stopped
-    environment:
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      MODEL_NAME: ${MODEL_NAME}
-      DATABASE_URL: postgresql+asyncpg://hermes:${POSTGRES_PASSWORD}@db:5432/hermes
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    depends_on:
-      db:
-        condition: service_healthy
-    ports:
-      - "8000:8000"
-
-  chat-ui:
-    build: ./services/chat-ui
-    restart: unless-stopped
-    environment:
-      HERMES_URL: http://hermes:8000
-    depends_on:
-      - hermes
-    ports:
-      - "8001:8000"
 
 volumes:
   pgdata:
