@@ -15,7 +15,9 @@ Two machines on the LAN:
     tool-server state.
 - **dolo-llm** (separate box on the LAN)
   - Ollama, deployed via `compose.dolo-llm.yml`.
-  - Pulls the models listed in [`infra/ollama/models.txt`](infra/ollama/models.txt).
+  - Pulls the models listed in [`infra/ollama/models.txt`](infra/ollama/models.txt)
+    (currently `qwen3:8b` — picked because hermes-agent needs native tool
+    calling, which Nous's Hermes-3/4 models don't have).
 
 `hermes-agent` on the host points at Ollama on dolo-llm via its
 "Custom Endpoint" provider. Personality (the "Hermes" persona — a Pegasus
@@ -23,9 +25,9 @@ power user) is configured inside hermes-agent, not in this repo. Pegasus
 tooling will land as **MCP servers** under `services/` once the first one
 exists.
 
-> "Hermes" the persona ≠ Hermes-3 the model. They share a name; that's why
-> we run Hermes-3-Llama-3.1-8B (`hermes3:8b`) — it natively meets
-> hermes-agent's 64K context floor.
+> Default model is `qwen3:8b`. We *don't* use Nous's Hermes-3/4 models —
+> they're conversational, not agentic, and hermes-agent itself warns against
+> them (no tool calling, which we need for MCP-driven Pegasus work).
 
 ## First-time setup
 
@@ -34,7 +36,7 @@ exists.
 ```sh
 git clone <this repo>
 cd dolios
-make llm-up        # starts Ollama + pulls hermes3:8b
+make llm-up        # starts Ollama + pulls qwen3:8b
 make llm-logs      # watch the model-puller until it exits
 ```
 
@@ -59,7 +61,7 @@ hermes model
 # Select "Custom Endpoint"
 # Base URL: http://dolo-llm:11434/v1   (or whatever the LAN resolves to)
 # API key:  ollama                      (any non-empty string works)
-# Model:    hermes3:8b
+# Model:    qwen3:8b
 ```
 
 ### 5. Use it
