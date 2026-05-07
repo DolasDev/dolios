@@ -1,0 +1,58 @@
+# Deployed to the dolo-llm machine (RTX 3060 12GB) on the LAN.
+# Run from this directory on dolo-llm:
+#   docker compose -f compose.dolo-llm.yml up -d
+#
+# Requires the NVIDIA Container Toolkit on the host:
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_HOST: 0.0.0.0:11434
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: pulls every model listed in infra/ollama/models.txt, then exits.
+  # Re-runs are cheap (ollama pull is idempotent on already-present models).
+  model-puller:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ./infra/ollama/models.txt:/models.txt:ro
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        while IFS= read -r model || [ -n "$$model" ]; do
+          case "$$model" in
+            ''|\#*) continue ;;
+          esac
+          echo ">> pulling $$model"
+          ollama pull "$$model"
+        done < /models.txt
+        echo ">> all models pulled"
+    restart: "no"
+
+volumes:
+  ollama-data:
