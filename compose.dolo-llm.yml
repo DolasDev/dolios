@@ -10,8 +10,14 @@ services:
     restart: unless-stopped
     ports:
       - "11434:11434"
+    # Bind-mounted to the host's native ~/.ollama store (where the model was
+    # first pulled) so the ~23GB qwen3.6 download is reused, not duplicated.
+    # gpu-stack.sh clears any stray native `ollama serve` before this starts,
+    # so the two never contend for the store or the port. ${HOME} must resolve
+    # to the user who pulled the model — run `make`/the script as that user,
+    # not via sudo.
     volumes:
-      - ollama-data:/root/.ollama
+      - ${HOME}/.ollama:/root/.ollama
     environment:
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_HOST: 0.0.0.0:11434
@@ -53,6 +59,3 @@ services:
         done < /models.txt
         echo ">> all models pulled"
     restart: "no"
-
-volumes:
-  ollama-data:

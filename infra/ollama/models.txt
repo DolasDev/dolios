@@ -1,3 +1,10 @@
 # Models the dolo-llm Ollama instance will pull on `make llm-up`.
 # Lines starting with `#` are ignored.
-qwen3:8b
+#
+# Primary: agentic orchestrator model — see ../../MODEL_OPTIONS.md for the
+# reasoning. ~23GB, 35B-A3B MoE (3B active). Already present in the
+# bind-mounted ~/.ollama store, so the puller verifies and skips the download.
+qwen3.6:35b-a3b
+
+# Fallback — smaller, fully fits the 12GB VRAM, faster. Uncomment to also pull.
+#qwen3:8b
