@@ -12,7 +12,8 @@
 SWITCH := ./infra/gpu-stack.sh
 
 .PHONY: up down restart logs ps env \
-        llm-up llm-down llm-logs llm-ps gpu-status
+        llm-up llm-down llm-logs llm-ps gpu-status \
+        usage usage-decide usage-test
 
 up:
 	docker compose up -d
@@ -47,3 +48,15 @@ gpu-status:
 
 env:
 	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example — edit it before \`make up\`.")
+
+# Spare-capacity gate — the orchestrator's pre-dispatch check. See
+# services/usage-gate/README.md.
+usage:
+	@python3 services/usage-gate/usage_gate.py
+
+# Emit a dispatch/hold decision; exits 1 on hold so shell can branch on $?.
+usage-decide:
+	@python3 services/usage-gate/usage_gate.py --decide
+
+usage-test:
+	@cd services/usage-gate && python3 test_usage_gate.py
