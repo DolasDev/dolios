@@ -127,8 +127,9 @@ hermes --tui                        # or run a specific profile
 ├── scripts/
 │   └── materialize-employee.sh  # Spec → ~/.hermes/profiles/<role>/
 ├── services/
-│   └── usage-gate/         # Spare-capacity gate (pre-dispatch usage check)
-└── Makefile                # `up`, `llm-up`, `usage`, `employee`, `gpu-status`, ...
+│   ├── usage-gate/         # Spare-capacity gate (pre-dispatch usage check)
+│   └── coder/              # Guardrailed dispatcher for autonomous-coder
+└── Makefile                # `up`, `llm-up`, `usage`, `employee`, `coder-*`, ...
 ```
 
 Planned (see [`ROADMAP.md`](ROADMAP.md)): `services/pegasus-mcp/` (once Pegasus

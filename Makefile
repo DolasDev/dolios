@@ -13,7 +13,8 @@ SWITCH := ./infra/gpu-stack.sh
 
 .PHONY: up down restart logs ps env \
         llm-up llm-down llm-logs llm-ps gpu-status \
-        usage usage-decide usage-test employee
+        usage usage-decide usage-test employee \
+        coder-preflight coder-test
 
 up:
 	docker compose up -d
@@ -67,3 +68,10 @@ usage-test:
 employee:
 	@test -n "$(ROLE)" || (echo "usage: make employee ROLE=<role> (see employees/)"; exit 2)
 	@./scripts/materialize-employee.sh $(ROLE)
+
+# autonomous-coder dispatcher (services/coder/). Needs coder.yaml on the host.
+coder-preflight:
+	@python3 services/coder/dispatch.py --preflight-only
+
+coder-test:
+	@cd services/coder && python3 test_dispatch.py

@@ -3,6 +3,10 @@
 .env.local
 .env.*.local
 
+# Coder dispatcher: per-host config (allowlist/paths) and run ledger
+services/coder/coder.yaml
+services/coder/.ledger.jsonl
+
 # Python
 __pycache__/
 *.py[cod]

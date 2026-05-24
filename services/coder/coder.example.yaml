@@ -1,0 +1,26 @@
+# autonomous-coder dispatcher config (TEMPLATE).
+#
+# Copy to coder.yaml (git-ignored) and edit for the host. The dispatcher refuses
+# to do anything not permitted here — this file IS the guardrail surface.
+
+# Repos the coder is ALLOWED to touch. Anything not listed is refused outright.
+# name -> absolute path of a local clone on the host.
+allowlist:
+  dolios: /home/steve/repos/Dolios
+  # pegasus: /home/steve/repos/pegasus
+
+# Git policy.
+base_branch: main          # the branch we branch OFF and target PRs at; never committed to directly
+branch_prefix: auto/coder  # work branches are <prefix>/<task_id>-<timestamp>
+
+# Hard budget caps (USD, from Claude Code's reported total_cost_usd). The
+# dispatcher refuses to start a run that would exceed these, and flags a run
+# whose cost exceeds the per-run cap.
+budget:
+  max_cost_usd_per_run: 2.00
+  max_cost_usd_per_5h: 10.00
+  ledger_path: services/coder/.ledger.jsonl   # run history for window accounting
+
+# Spare-capacity gate threshold passed through to usage_gate --decide.
+gate:
+  max_utilization: 85        # percent; only used if Anthropic's status field is absent

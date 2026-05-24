@@ -56,18 +56,27 @@ hand-built profile.
       the dev box) — materialize a profile and confirm hermes loads SOUL.md +
       model config.
 
-## Phase 3 — Role: `autonomous-coder` ⏳
+## Phase 3 — Role: `autonomous-coder` 🔨
 
 Builds directly on the usage gate. Local model supervises; Claude Code (or an
 OpenRouter model) does the engineering.
 
-- [ ] **Usage-gate token refresh** (open item) — implement the OAuth
-      `refresh_token` grant so unattended runs survive token expiry.
-- [ ] Guardrails: work on branches + open PRs (never push `main`), per-repo
-      allowlist, hard per-window token budget.
-- [ ] Repo registry — which Dolios applications the coder may touch.
-- [ ] The supervisor loop (profile cron): gate → pick backlog task → dispatch
-      `claude -p … --output-format json` → record outcome to Postgres → loop.
+- ✅ **Guardrailed dispatcher** (`services/coder/`): gate-check → allowlist →
+      branch-off-base (never `main`) → `claude -p` → budget → `gh pr create`
+      (never merge) → ledger. Guardrails enforced in code; 9 unit tests with
+      mocked git/claude/gh. `make coder-preflight` / `coder-test`.
+- ✅ **Repo allowlist + budget** config (`coder.example.yaml`; real `coder.yaml`
+      git-ignored, per-host).
+- [ ] **Usage-gate token refresh** (open item) — OAuth `refresh_token` grant so
+      unattended runs survive token expiry. ⚠️ rotates creds / rewrites
+      `~/.claude/.credentials.json` and the endpoint is undocumented — implement
+      defensively, validate carefully on the host. Until then the gate fails
+      closed (holds) on an expired token.
+- [ ] **Task-selection layer** — expose `dispatch.py` to the hermes model as a
+      guarded tool + a backlog source, so the supervisor can pick work.
+- [ ] **Host run** — enable the `autonomous-coder` cron + flip `approvals` once
+      validated on a host with `hermes` + `claude` + `gh`. Record runs to
+      Postgres (Phase 5) instead of / in addition to the JSONL ledger.
 
 ## Phase 4 — Role: `sim-mover` 🔒 (blocked on Pegasus)
 

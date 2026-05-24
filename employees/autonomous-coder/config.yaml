@@ -39,13 +39,17 @@ terminal:
   backend: "local"
   timeout: 180
 
-# The supervisor loop (Phase 3). Left COMMENTED so materializing this profile
-# never starts dispatching before the gate/guardrails are wired. Uncomment and
-# finalize the prompt when Phase 3 lands.
+# The supervisor loop. The guardrailed dispatcher (services/coder/dispatch.py)
+# enforces gate + allowlist + branch + budget + PR-not-merge in code; this loop
+# only has the model PICK a task and call it. Left COMMENTED until host
+# validation (needs hermes + claude + gh) and token-refresh land — see
+# services/coder/README.md and ROADMAP Phase 3.
 # cron:
 #   coder_loop:
 #     schedule: "*/30 * * * *"   # every 30 min
 #     prompt: >
-#       Run the spare-capacity gate. If it holds, stop and report. Otherwise pick
-#       one small backlog task from an allowlisted repo, dispatch it to Claude
-#       Code on a branch, open a PR, and record the outcome.
+#       Pick one small backlog task from an allowlisted repo, then run
+#       `python3 services/coder/dispatch.py --repo <name> --task <id>
+#       --instructions "<what to do>"`. The dispatcher will refuse if the
+#       capacity gate holds, the repo isn't allowlisted, or the budget is spent.
+#       Report the resulting PR url or the refusal reason.
