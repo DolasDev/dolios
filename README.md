@@ -1,8 +1,34 @@
 # dolios
 
-IaC and agent specifications for a fleet of AI moving-and-storage entity
-representatives that act as power users inside Pegasus, our move-and-storage
-SaaS platform. Used for testing, demo, and dev.
+IaC and agent specifications for a **fleet of AI employees** — long-running
+[hermes-agent](https://hermes-agent.nousresearch.com) profiles, each configured
+for a specific job, that we provision reproducibly from this repo.
+
+## Mission
+
+Stand up and manage a fleet of autonomous AI "employees." Each employee is a
+hermes-agent **profile** with its own identity, model, tools, guardrails, and
+schedule. The fleet is **extensible by design** — new roles are new profiles.
+Initial roles:
+
+- **`sim-mover`** — runs a *simulated* moving-and-storage company against the
+  [Pegasus](https://api.pegasus.dolas.dev) API (our move-management SaaS),
+  acting as a power user to generate realistic activity for testing, demo, and
+  dev. *Blocked:* Pegasus currently exposes only customers/documents — the
+  jobs/moves domain is still being built out, so this role waits.
+- **`autonomous-coder`** — does autonomous engineering on the various Dolios
+  applications (work on branches, open PRs), gated by spare Anthropic capacity.
+
+## Core concepts
+
+| Concept | What it is | Where it lives |
+|---|---|---|
+| **Employee** | One hermes-agent profile = one isolated agent (own `SOUL.md`, `config.yaml`, model, tools, cron, memory, state DB). | `~/.hermes/profiles/<role>/` on the host; **specs checked into this repo** so the fleet is reproducible. |
+| **Identity** | `SOUL.md` — who the employee is; first thing in its system prompt. | Per profile; versioned here. |
+| **Model / provider** | Per-employee choice: **local** model on dolo-llm *or* an **external** model via **OpenRouter** (with optional fallback). | `config.yaml` per profile. |
+| **Tools** | Capabilities exposed to the employee as **MCP servers** (e.g. Pegasus). | `services/` (on hold until Pegasus jobs land). |
+| **Capacity gate** | Pre-dispatch check of Anthropic subscription headroom for the coding role. | `services/usage-gate/`. |
+| **Shared state** | Fleet registry, task/run history, schedules. | Postgres (`docker-compose.yml`). |
 
 ## Architecture
 
@@ -10,33 +36,40 @@ Two machines on the LAN:
 
 - **host** (RTX 3060 12GB, this repo's primary target)
   - `hermes-agent` — Nous Research's CLI/TUI agent, installed natively. This
-    *is* the agent runtime; we no longer wrap it.
-  - `docker compose up -d` brings up Postgres for future agent memory and MCP
-    tool-server state.
+    *is* the employee runtime; one **profile per employee**. We don't wrap it.
+  - `docker compose up -d` brings up Postgres for fleet state (registry, run
+    history) and MCP tool-server state.
 - **dolo-llm** (separate box on the LAN)
-  - Ollama, deployed via `compose.dolo-llm.yml`.
-  - Pulls the models listed in [`infra/ollama/models.txt`](infra/ollama/models.txt)
-    (currently `qwen3.6:35b-a3b` — see [`MODEL_OPTIONS.md`](MODEL_OPTIONS.md) for
-    why; picked because hermes-agent needs native tool calling, which Nous's
-    Hermes-3/4 models don't have).
+  - Ollama, deployed via `compose.dolo-llm.yml` — serves the **local** model
+    option. Pulls the models in [`infra/ollama/models.txt`](infra/ollama/models.txt)
+    (currently `qwen3.6:35b-a3b` — see [`MODEL_OPTIONS.md`](MODEL_OPTIONS.md)).
   - The single RTX 3060 serves one model at a time; `make llm-up` frees the GPU
     (stops any other container reserving it) before starting Ollama.
 
-`hermes-agent` on the host points at Ollama on dolo-llm via its
-"Custom Endpoint" provider. Personality (the "Hermes" persona — a Pegasus
-power user) is configured inside hermes-agent, not in this repo. Pegasus
-tooling will land as **MCP servers** under `services/` once the first one
-exists.
+### Model providers — local *or* OpenRouter, per employee
 
-> Default model is `qwen3.6:35b-a3b` (35B-A3B MoE; reasoning + reliable tool
-> calling — see [`MODEL_OPTIONS.md`](MODEL_OPTIONS.md)). We *don't* use Nous's
-> Hermes-3/4 models — they're conversational, not agentic, and hermes-agent
-> itself warns against them (no tool calling, which we need for MCP-driven
-> Pegasus work).
+Each employee picks its model in its profile `config.yaml`. hermes-agent routes
+natively:
+
+- **Local** (default for always-on, cheap, private work): a custom endpoint
+  `base_url: http://dolo-llm:11434/v1` → `qwen3.6:35b-a3b` on Ollama. Constrained
+  by the single 12GB GPU (one model at a time).
+- **External via OpenRouter** (for heavier/frontier work, or to avoid GPU
+  contention): the built-in OpenRouter provider + API key. No local GPU cost.
+
+Because routing is per profile, the `autonomous-coder` can run a frontier model
+through OpenRouter while a `sim-mover` runs the local model — simultaneously,
+since only the local one touches the 3060. See
+[`MODEL_OPTIONS.md`](MODEL_OPTIONS.md) for the local-model decision and the
+local-vs-OpenRouter tradeoff.
+
+> We *don't* use Nous's Hermes-3/4 models — they're conversational, not agentic,
+> and hermes-agent itself warns against them (no native tool calling, which the
+> fleet needs for MCP-driven work).
 
 ## First-time setup
 
-### 1. Bring up the LLM (on the dolo-llm machine)
+### 1. Bring up the local model (on the dolo-llm machine)
 
 ```sh
 git clone <this repo>
@@ -48,7 +81,7 @@ make llm-logs      # watch the model-puller until it exits
 ### 2. Bring up Postgres (on the host)
 
 ```sh
-make env           # creates .env from .env.example; edit POSTGRES_PASSWORD
+make env           # creates .env from .env.example; edit secrets
 make up
 ```
 
@@ -59,20 +92,22 @@ curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scri
 source ~/.bashrc   # or ~/.zshrc
 ```
 
-### 4. Point hermes-agent at our Ollama
+### 4. Create an employee profile and point it at a model
 
 ```sh
-hermes model
-# Select "Custom Endpoint"
-# Base URL: http://dolo-llm:11434/v1   (or whatever the LAN resolves to)
-# API key:  ollama                      (any non-empty string works)
-# Model:    qwen3.6:35b-a3b
+hermes profile create sim-mover     # one profile per employee
+hermes model                        # configure its model:
+#   Local:      Custom Endpoint → http://dolo-llm:11434/v1 → qwen3.6:35b-a3b
+#   External:   OpenRouter → <model> (uses your OPENROUTER_API_KEY)
 ```
 
-### 5. Use it
+Profile identity/config templates will be checked into this repo (see roadmap)
+so a profile can be materialized rather than hand-built.
+
+### 5. Run it
 
 ```sh
-hermes --tui
+hermes --tui                        # or run a specific profile
 ```
 
 ## Layout
@@ -80,17 +115,27 @@ hermes --tui
 ```
 .
 ├── compose.dolo-llm.yml    # Ollama stack, deployed to the dolo-llm machine
-├── docker-compose.yml      # Host stack: Postgres only (for now)
-├── MODEL_OPTIONS.md        # Which model to run, and why
+├── docker-compose.yml      # Host stack: Postgres (fleet state)
+├── MODEL_OPTIONS.md        # Local-model decision + local-vs-OpenRouter tradeoff
+├── ROADMAP.md              # Phased plan toward the fleet
 ├── infra/
 │   ├── ollama/models.txt   # Models the dolo-llm Ollama instance will pull
 │   └── gpu-stack.sh        # Free the GPU + serve our model (up/down/status)
-└── Makefile                # `up`, `down`, `llm-up`, `llm-down`, `gpu-status`, ...
+├── services/
+│   └── usage-gate/         # Spare-capacity gate (pre-dispatch usage check)
+└── Makefile                # `up`, `down`, `llm-up`, `usage`, `gpu-status`, ...
 ```
 
-## What's next
+Planned (see [`ROADMAP.md`](ROADMAP.md)): `employees/` (checked-in profile
+specs) and `services/pegasus-mcp/` (once Pegasus jobs exist).
 
-- First MCP tool server for Pegasus (read-only: list jobs, get job).
-- Persona configs as hermes-agent personalities, checked into this repo so
-  the fleet is reproducible.
-- Agent-memory schema in Postgres once an MCP server actually needs it.
+## Status & next steps
+
+See [`ROADMAP.md`](ROADMAP.md). In short:
+
+- **Done:** local model selected + verified; GPU single-tenant switching;
+  spare-capacity gate (`services/usage-gate/`).
+- **Now:** define the employee/profile framework (checked-in specs) and the
+  OpenRouter provider path.
+- **Blocked:** Pegasus MCP server + `sim-mover` role — waiting on Pegasus
+  jobs/moves endpoints.

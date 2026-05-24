@@ -1,24 +1,48 @@
-# Model options for the dolios orchestrator
+# Model options for the dolios fleet — the local option
 
-Reasoning record for which local model `hermes-agent` should run. Revisit when
-hardware changes or a newer model lands. **Model is a config value, not code** —
-swapping is: add the tag to `infra/ollama/models.txt` → `make llm-up` →
-re-point `hermes model`. Nothing here is wired up yet.
+Reasoning record for which **local** model the fleet runs on dolo-llm. Revisit
+when hardware changes or a newer model lands. **Model is a config value, not
+code** — swapping is: add the tag to `infra/ollama/models.txt` → `make llm-up` →
+re-point the profile's `hermes model`.
 
-## Purpose (this is NOT a coding model)
+> **Where this fits.** Each employee (hermes-agent profile) picks its model per
+> [`config.yaml`](README.md#model-providers--local-or-openrouter-per-employee):
+> the **local** model documented here, *or* an **external** model via
+> **OpenRouter**. This file is the decision record for the local option. The
+> [Local vs OpenRouter](#local-vs-openrouter) section below covers when to reach
+> for each.
 
-`hermes-agent` is the **orchestrator**, not the coder. Claude Code (Opus/Sonnet,
-via the Anthropic subscription) does the actual engineering. The local model is
-the cheap, always-on supervisor that, on a schedule:
+## Purpose of the local model (this is NOT a coding model)
 
-1. checks Anthropic usage limits (spare-capacity gate),
+The local model is the **cheap, always-on** option — ideal for employees that
+run 24/7 and either drive tools (e.g. `sim-mover` against Pegasus) or act as a
+**supervisor/orchestrator** rather than do heavy reasoning themselves. The
+canonical example is the `autonomous-coder` loop, where the local model is the
+supervisor — not the coder — and on a schedule:
+
+1. checks Anthropic usage limits (spare-capacity gate — see `services/usage-gate/`),
 2. picks a backlog task (cleanup / tests / refactor / tech-debt / devops / research),
 3. dispatches it to Claude Code headless (`claude -p ... --output-format json`),
 4. records the outcome and loops.
 
-So the qualities that matter are **reliable native tool-calling**, **sound
-judgment/reasoning** for task selection and failure recovery, and **determinism**
-— *not* raw coding skill. It runs 24/7, so it must stay responsive.
+So the qualities that matter for the local pick are **reliable native
+tool-calling**, **sound judgment/reasoning** for task selection and failure
+recovery, and **determinism** — *not* raw coding skill. It runs 24/7, so it must
+stay responsive. (Employees that *do* need frontier reasoning route to OpenRouter
+instead — see below.)
+
+## Local vs OpenRouter
+
+Provider is a per-employee choice in the profile `config.yaml`. Rough guidance:
+
+| Reach for… | When | Cost / constraint |
+|---|---|---|
+| **Local** (`qwen3.6:35b-a3b` on dolo-llm) | Always-on, high-frequency, private, or tool-driving/supervisory work where the local model is "enough." | Free to run, but the single 12GB GPU serves **one model at a time** — local employees share that one card. |
+| **OpenRouter** (external) | Heavier/frontier reasoning, bursty work, or anything that shouldn't queue behind the GPU. | Per-token cost; no local GPU contention, so it runs alongside a local employee. |
+
+hermes-agent also supports **fallback providers**, so an employee can prefer
+local and fall back to OpenRouter (or vice-versa). Keep the `OPENROUTER_API_KEY`
+in the profile's `.env`, never in this repo.
 
 ## Hardware budget (binding constraint)
 
@@ -119,18 +143,23 @@ the host's `~/.ollama` so the already-pulled model is reused (no re-download).
 
 ## Open dependencies (not model choices, but block the full system)
 
-- **Usage gate** — `GET /api/oauth/usage` (`anthropic-beta: oauth-2025-04-20`):
-  **verified working 2026-05-23** (HTTP 200, returns `five_hour`/`seven_day`
-  utilization + `resets_at` + per-model `sonnet`/`opus`). Still *undocumented* —
-  can break without notice; no official `claude usage --json` yet.
-  **Unit gotcha (proven live):** the `utilization` scale is ambiguous —
-  `five_hour: 1.0` alongside `seven_day: 18.0` only reconciles as *percent*, but
-  the model read `1.0` as "100% used" and wrongly refused to dispatch. The gate
-  MUST normalize this to an explicit `percent_used` (or `remaining`) with clear
-  units before handing it to the model, and confirm the scale once against the
-  `/usage` widget. Token comes from `~/.claude/.credentials.json`
-  (`claudeAiOauth.accessToken`); unattended use needs refresh handling
-  (`refreshToken`/`expiresAt` are in the same file).
+- **Usage gate** — **BUILT 2026-05-24** (`services/usage-gate/`, `make usage` /
+  `make usage-decide`). Primary source is the **unified rate-limit headers** off
+  a 1-token `/v1/messages` ping (`anthropic-ratelimit-unified-5h/7d-utilization`,
+  `-status`, `-reset`, `representative-claim`) — same numbers Claude Code's
+  `/usage` shows; `GET /api/oauth/usage` is best-effort enrichment for per-model
+  breakdowns. No official `claude usage --json` exists (the `/usage` command is
+  interactive-only); the endpoint is undocumented and can break, so headers are
+  primary. **Scale gotcha — resolved & proven:** the *headers* are **0-1**
+  (`0.09`) while the *endpoint* is **0-100** (`10.0`) — measured at the same
+  instant, 100× apart. That mismatch is what made the model read `1.0` as "100%
+  used" and refuse. The gate normalizes both to explicit `percent_used` /
+  `percent_remaining` and gates on Anthropic's authoritative `…-status:
+  allowed|rejected` rather than a bare number. A regression test
+  (`test_low_utilization_does_not_hold`) locks the fix in. Token comes from
+  `~/.claude/.credentials.json` (`claudeAiOauth.accessToken`); **unattended use
+  still needs refresh handling** — the gate currently fails closed on an expired
+  token (`refreshToken`/`expiresAt` are in the same file).
 - **Guardrails** for autonomous Claude Code runs: work on branches + open PRs
   (not direct push to `main`), per-repo allowlist, hard per-window token budget.
 - **Backlog store:** Postgres (already in `docker-compose.yml`) is the natural
