@@ -44,6 +44,46 @@ hermes-agent also supports **fallback providers**, so an employee can prefer
 local and fall back to OpenRouter (or vice-versa). Keep the `OPENROUTER_API_KEY`
 in the profile's `.env`, never in this repo.
 
+### OpenRouter config (verified slugs)
+
+Provider config in a profile's `config.yaml`. **OpenRouter as primary** (for an
+employee that wants a frontier/heavier model, no GPU cost):
+
+```yaml
+model:
+  provider: "openrouter"
+  default: "openrouter/qwen/qwen3-235b-a22b-2507"   # see slugs below
+```
+
+**Local primary + OpenRouter fallback** (what `autonomous-coder` uses — same
+model family, just bigger, so failover doesn't change behavior):
+
+```yaml
+model:
+  provider: "custom"
+  base_url: "http://dolo-llm:11434/v1"
+  default: "qwen3.6:35b-a3b"
+  fallback_providers:
+    - provider: "openrouter"
+      model: "openrouter/qwen/qwen3-235b-a22b-2507"
+```
+
+`OPENROUTER_API_KEY` is read from the profile's `.env`. Candidate slugs (pulled
+from OpenRouter's models API, all `tools=True`):
+
+| Slug | Why | Ctx |
+|---|---|---|
+| `qwen/qwen3-235b-a22b-2507` | **Default** — same family as the local qwen3.6, scaled up; consistent tool/prompt behavior on failover. | 262K |
+| `qwen/qwen3-coder` | If an employee should *itself* code rather than dispatch. | 1M |
+| `anthropic/claude-haiku-4.5` | Cheap, excellent tool-calling, if Qwen-family isn't wanted. | 200K |
+| `deepseek/deepseek-v3.2` | Strong, inexpensive alternative. | 131K |
+
+> **Note on the `openrouter/` prefix.** hermes's own config docs prefix the
+> OpenRouter slug with `openrouter/` (e.g. `openrouter/qwen/qwen3-235b-a22b-2507`),
+> while OpenRouter's native slug is `qwen/qwen3-235b-a22b-2507`. The underlying
+> slug is verified to exist; **confirm the hermes prefix convention on the host**
+> during the smoke test (ROADMAP Phase 1).
+
 ## Hardware budget (binding constraint)
 
 - **dolo-llm** (where the model runs): RTX 3060, **12GB VRAM**, **48GB system RAM**.

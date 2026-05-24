@@ -15,16 +15,27 @@ Legend: ✅ done · 🔨 in progress · ⏳ next · 🔒 blocked
 - ✅ Spare-capacity gate (`services/usage-gate/`) — normalized usage contract.
 - ✅ Postgres scaffold (`docker-compose.yml`).
 
-## Phase 1 — Provider path (local **+** OpenRouter) ⏳
+## Phase 1 — Provider path (local **+** OpenRouter) 🔨 (host smoke-test pending)
 
 Make "pick local or external per employee" real and tested.
 
-- [ ] Add the OpenRouter provider to a throwaway profile; verify a live model
-      call end-to-end through hermes-agent.
-- [ ] Confirm fallback-provider behavior (prefer local → fall back to OpenRouter).
-- [ ] Decide default model per role (local supervisor vs frontier coder).
-- [ ] Document secret handling: `OPENROUTER_API_KEY` lives in each profile's
-      `~/.hermes/profiles/<role>/.env`, **never** in this repo.
+- ✅ Default OpenRouter model chosen + slug verified against the live models API:
+      `qwen/qwen3-235b-a22b-2507` (same family as local qwen3.6, `tools=True`).
+      Alternatives recorded in `MODEL_OPTIONS.md`.
+- ✅ OpenRouter wired into `autonomous-coder` config as a local-primary fallback;
+      `config.yaml` snippets (OpenRouter-primary and fallback) in `MODEL_OPTIONS.md`.
+- ✅ Secret handling documented: `OPENROUTER_API_KEY` in each profile's
+      `~/.hermes/profiles/<role>/.env` (via `env.example`), **never** in this repo.
+- [ ] **Host smoke-test** (needs hermes installed + a real key — can't run on the
+      dev box). On the host:
+  1. Put `OPENROUTER_API_KEY=sk-or-…` in `~/.hermes/profiles/autonomous-coder/.env`.
+  2. Temporarily set `model.provider: openrouter` /
+     `default: openrouter/qwen/qwen3-235b-a22b-2507`; run
+     `hermes -p autonomous-coder chat -q "call a tool"` → confirm a real call +
+     tool-calling works. **Confirm the `openrouter/` prefix convention here.**
+  3. Restore local primary; stop dolo-llm Ollama (`make llm-down`) and run again →
+     confirm it **fails over** to the OpenRouter fallback.
+  4. Bring Ollama back up; confirm it prefers local again.
 
 ## Phase 2 — Employee / profile framework ✅ (host smoke-test pending)
 
