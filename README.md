@@ -118,24 +118,30 @@ hermes --tui                        # or run a specific profile
 ├── docker-compose.yml      # Host stack: Postgres (fleet state)
 ├── MODEL_OPTIONS.md        # Local-model decision + local-vs-OpenRouter tradeoff
 ├── ROADMAP.md              # Phased plan toward the fleet
+├── employees/              # Checked-in employee specs (one dir per role)
+│   ├── autonomous-coder/   #   SOUL.md + config.yaml + env.example
+│   └── sim-mover/          #   (stub — blocked on Pegasus jobs)
 ├── infra/
 │   ├── ollama/models.txt   # Models the dolo-llm Ollama instance will pull
 │   └── gpu-stack.sh        # Free the GPU + serve our model (up/down/status)
+├── scripts/
+│   └── materialize-employee.sh  # Spec → ~/.hermes/profiles/<role>/
 ├── services/
 │   └── usage-gate/         # Spare-capacity gate (pre-dispatch usage check)
-└── Makefile                # `up`, `down`, `llm-up`, `usage`, `gpu-status`, ...
+└── Makefile                # `up`, `llm-up`, `usage`, `employee`, `gpu-status`, ...
 ```
 
-Planned (see [`ROADMAP.md`](ROADMAP.md)): `employees/` (checked-in profile
-specs) and `services/pegasus-mcp/` (once Pegasus jobs exist).
+Planned (see [`ROADMAP.md`](ROADMAP.md)): `services/pegasus-mcp/` (once Pegasus
+jobs exist).
 
 ## Status & next steps
 
 See [`ROADMAP.md`](ROADMAP.md). In short:
 
 - **Done:** local model selected + verified; GPU single-tenant switching;
-  spare-capacity gate (`services/usage-gate/`).
-- **Now:** define the employee/profile framework (checked-in specs) and the
-  OpenRouter provider path.
+  spare-capacity gate (`services/usage-gate/`); employee/profile framework
+  (`employees/`, `make employee ROLE=…`).
+- **Now:** OpenRouter provider path (Phase 1); then flesh out the
+  `autonomous-coder` loop + guardrails (Phase 3).
 - **Blocked:** Pegasus MCP server + `sim-mover` role — waiting on Pegasus
   jobs/moves endpoints.

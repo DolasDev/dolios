@@ -1,0 +1,32 @@
+# sim-mover — hermes-agent profile config (TEMPLATE, no secrets). STUB.
+#
+# Materialized into ~/.hermes/profiles/sim-mover/config.yaml by
+# `make employee ROLE=sim-mover`. This role is BLOCKED on the Pegasus
+# jobs/moves API; the Pegasus MCP toolset is intentionally absent until then
+# (ROADMAP Phase 4).
+
+model:
+  # Local model is fine for tool-driving simulation work.
+  default: "qwen3.6:35b-a3b"
+  provider: "custom"
+  base_url: "http://dolo-llm:11434/v1"
+  api_key: "ollama"
+  context_length: 40960
+
+agent:
+  max_turns: 90
+  tool_use_enforcement: "auto"
+
+approvals:
+  mode: "manual"
+
+terminal:
+  backend: "local"
+
+# Pegasus tools land here once the jobs/moves API exists and we build the MCP
+# server (services/pegasus-mcp/). Server-side Bearer auth via ${PEGASUS_API_KEY}.
+# mcp_servers:
+#   pegasus:
+#     command: "..."          # services/pegasus-mcp entrypoint
+#     env:
+#       PEGASUS_API_KEY: "${PEGASUS_API_KEY}"

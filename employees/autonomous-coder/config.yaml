@@ -1,0 +1,46 @@
+# autonomous-coder — hermes-agent profile config (TEMPLATE, no secrets).
+#
+# Materialized into ~/.hermes/profiles/autonomous-coder/config.yaml by
+# `make employee ROLE=autonomous-coder`. Secrets live in that profile's .env
+# (see env.example), never here.
+#
+# This employee is the *supervisor*: the local model decides and dispatches;
+# Claude Code does the engineering. See SOUL.md and MODEL_OPTIONS.md.
+
+model:
+  # Local qwen3.6 on dolo-llm — cheap, always-on supervisor (see MODEL_OPTIONS.md).
+  # Phase 1 may switch this to / add OpenRouter for heavier reasoning.
+  default: "qwen3.6:35b-a3b"
+  provider: "custom"
+  base_url: "http://dolo-llm:11434/v1"
+  api_key: "ollama"          # any non-empty string; Ollama ignores it
+  context_length: 40960      # capped per MODEL_OPTIONS (don't use the full 262K)
+  # Optional resilience — uncomment once OPENROUTER_API_KEY is set (Phase 1):
+  # fallback_providers:
+  #   - provider: "openrouter"
+  #     model: "openrouter/qwen/qwen3-235b"
+
+agent:
+  max_turns: 90
+  tool_use_enforcement: "auto"
+  reasoning_effort: "medium"
+
+# Guardrail: require human approval rather than acting unattended until the
+# Phase 3 guardrails (branch+PR, allowlist, budget) are in place.
+approvals:
+  mode: "manual"
+
+terminal:
+  backend: "local"
+  timeout: 180
+
+# The supervisor loop (Phase 3). Left COMMENTED so materializing this profile
+# never starts dispatching before the gate/guardrails are wired. Uncomment and
+# finalize the prompt when Phase 3 lands.
+# cron:
+#   coder_loop:
+#     schedule: "*/30 * * * *"   # every 30 min
+#     prompt: >
+#       Run the spare-capacity gate. If it holds, stop and report. Otherwise pick
+#       one small backlog task from an allowlisted repo, dispatch it to Claude
+#       Code on a branch, open a PR, and record the outcome.

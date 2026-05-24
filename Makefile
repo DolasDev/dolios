@@ -13,7 +13,7 @@ SWITCH := ./infra/gpu-stack.sh
 
 .PHONY: up down restart logs ps env \
         llm-up llm-down llm-logs llm-ps gpu-status \
-        usage usage-decide usage-test
+        usage usage-decide usage-test employee
 
 up:
 	docker compose up -d
@@ -60,3 +60,10 @@ usage-decide:
 
 usage-test:
 	@cd services/usage-gate && python3 test_usage_gate.py
+
+# Materialize a checked-in employee spec into a hermes-agent profile.
+#   make employee ROLE=autonomous-coder
+#   DRY_RUN=1 make employee ROLE=autonomous-coder
+employee:
+	@test -n "$(ROLE)" || (echo "usage: make employee ROLE=<role> (see employees/)"; exit 2)
+	@./scripts/materialize-employee.sh $(ROLE)

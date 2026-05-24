@@ -26,19 +26,24 @@ Make "pick local or external per employee" real and tested.
 - [ ] Document secret handling: `OPENROUTER_API_KEY` lives in each profile's
       `~/.hermes/profiles/<role>/.env`, **never** in this repo.
 
-## Phase 2 — Employee / profile framework ⏳
+## Phase 2 — Employee / profile framework ✅ (host smoke-test pending)
 
-The reproducibility backbone: define an employee as a checked-in spec, not a
+The reproducibility backbone: an employee is a checked-in spec, not a
 hand-built profile.
 
-- [ ] Decide the on-disk layout for checked-in specs — proposed `employees/<role>/`
-      holding `SOUL.md` (identity) + a `config.yaml` template (model/provider,
-      tools, cron) **minus secrets**.
-- [ ] Separate repo-tracked (SOUL.md, config template) from per-host/runtime
-      (`.env`, sessions, memory, state DB) — the latter stays out of git.
-- [ ] Write a materializer (`make employee ROLE=…` / script) that creates/updates
-      `~/.hermes/profiles/<role>/` from `employees/<role>/`.
-- [ ] Land two role templates as stubs: `sim-mover`, `autonomous-coder`.
+- ✅ Probed hermes-agent mechanics — `config.yaml`/`SOUL.md` are read on startup,
+      so file-based materialization works; full schema captured.
+- ✅ On-disk layout: `employees/<role>/` holds `SOUL.md` + `config.yaml` template
+      + `env.example` + `README.md`, **minus secrets**.
+- ✅ Tracked (SOUL.md, config, env.example) vs runtime (`.env`, sessions, memory,
+      state DB) split; runtime stays out of git.
+- ✅ Materializer `scripts/materialize-employee.sh` (`make employee ROLE=…`):
+      idempotent, backs up + diffs drift, seeds `.env` only if absent, never
+      touches runtime state. `DRY_RUN=1` supported. Verified against a temp base.
+- ✅ Two role specs: `autonomous-coder` (fleshed out) + `sim-mover` (stub).
+- [ ] **Pending:** live smoke-test on the actual host (hermes not installed on
+      the dev box) — materialize a profile and confirm hermes loads SOUL.md +
+      model config.
 
 ## Phase 3 — Role: `autonomous-coder` ⏳
 
