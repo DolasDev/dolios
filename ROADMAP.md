@@ -67,11 +67,13 @@ OpenRouter model) does the engineering.
       mocked git/claude/gh. `make coder-preflight` / `coder-test`.
 - ✅ **Repo allowlist + budget** config (`coder.example.yaml`; real `coder.yaml`
       git-ignored, per-host).
-- [ ] **Usage-gate token refresh** (open item) — OAuth `refresh_token` grant so
-      unattended runs survive token expiry. ⚠️ rotates creds / rewrites
-      `~/.claude/.credentials.json` and the endpoint is undocumented — implement
-      defensively, validate carefully on the host. Until then the gate fails
-      closed (holds) on an expired token.
+- ✅ **Usage-gate token refresh** — OAuth `refresh_token` grant against
+      `api.anthropic.com/v1/oauth/token` (the console endpoint is Cloudflare-
+      gated). Backs up + atomically rewrites creds; aborts before any write on a
+      bad response. `--refresh` / `--refresh-dry-run` / `--auto-refresh`.
+      Unit-tested with a mocked endpoint + temp file; dry-run verified against
+      the real creds. **Not yet run live** — do a real `--refresh` on the host
+      when ready (it rotates your actual Claude credentials).
 - [ ] **Task-selection layer** — expose `dispatch.py` to the hermes model as a
       guarded tool + a backlog source, so the supervisor can pick work.
 - [ ] **Host run** — enable the `autonomous-coder` cron + flip `approvals` once

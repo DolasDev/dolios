@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -51,6 +52,11 @@ CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 API_BASE = "https://api.anthropic.com"
 ANTHROPIC_VERSION = "2023-06-01"
 OAUTH_BETA = "oauth-2025-04-20"
+# OAuth token refresh. The console.anthropic.com token endpoint sits behind a
+# Cloudflare challenge that blocks programmatic clients; api.anthropic.com hosts
+# the same grant without it. client_id is Claude Code's public OAuth client.
+OAUTH_TOKEN_URL = f"{API_BASE}/v1/oauth/token"
+OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 # OAuth subscription tokens only resolve models Claude Code itself uses, and the
 # request must look like a Claude Code request (system-prompt preamble below).
 PING_MODEL = "claude-haiku-4-5-20251001"
@@ -79,6 +85,95 @@ def load_oauth() -> dict:
 def token_expired(oauth: dict, buffer_s: int = EXPIRY_BUFFER_S) -> bool:
     # expiresAt is epoch milliseconds.
     return (oauth.get("expiresAt", 0) / 1000) - buffer_s < time.time()
+
+
+def _post_oauth_token(body: dict, *, timeout: int = 30) -> dict:
+    """POST the refresh grant to the api.anthropic.com token endpoint."""
+    req = urllib.request.Request(
+        OAUTH_TOKEN_URL, data=json.dumps(body).encode(), method="POST"
+    )
+    req.add_header("content-type", "application/json")
+    req.add_header("user-agent", "anthropic")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:300]
+        raise UsageError(f"token refresh HTTP {exc.code}: {detail}")
+    except urllib.error.URLError as exc:
+        raise UsageError(f"network error during token refresh: {exc}")
+
+
+def refresh_access_token(
+    *,
+    credentials_path: str = CREDENTIALS_PATH,
+    poster=_post_oauth_token,
+    now=None,
+    dry_run: bool = False,
+) -> dict:
+    """Exchange the stored refresh token for a fresh access token.
+
+    DESTRUCTIVE: on success this rewrites `credentials_path` with rotated tokens
+    (the old file is copied to `<path>.bak` first, and the new file is written
+    atomically with 0600 perms). The refresh token itself rotates, so a failed
+    or partial write must not lose it — hence backup + atomic replace.
+
+    `poster` is injectable for testing; `dry_run=True` builds and returns the
+    request (token redacted) WITHOUT sending it or touching any file.
+    """
+    now = now if now is not None else time.time()
+    with open(credentials_path) as fh:
+        doc = json.load(fh)
+    oauth = doc.get("claudeAiOauth", {})
+    refresh = oauth.get("refreshToken")
+    if not refresh:
+        raise UsageError(f"no refreshToken in {credentials_path}; cannot refresh")
+
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh,
+        "client_id": OAUTH_CLIENT_ID,
+    }
+    if dry_run:
+        redacted = {**body, "refresh_token": "<redacted>"}
+        return {"dry_run": True, "url": OAUTH_TOKEN_URL, "body": redacted}
+
+    resp = poster(body)
+    access = resp.get("access_token")
+    if not access:
+        raise UsageError(f"token refresh response missing access_token: {resp}")
+
+    # expires_in is seconds; the credentials file stores expiresAt in ms.
+    expires_in = resp.get("expires_in")
+    if expires_in is not None:
+        expires_at_ms = int((now + float(expires_in)) * 1000)
+    else:  # fall back to a returned expires_at (seconds) if that's what we got
+        expires_at_ms = int(float(resp.get("expires_at", now)) * 1000)
+
+    oauth["accessToken"] = access
+    oauth["refreshToken"] = resp.get("refresh_token", refresh)  # rotation
+    oauth["expiresAt"] = expires_at_ms
+    doc["claudeAiOauth"] = oauth
+
+    # Back up, then write atomically with the original perms (default 0600).
+    if os.path.exists(credentials_path):
+        shutil.copy2(credentials_path, credentials_path + ".bak")
+    try:
+        mode = os.stat(credentials_path).st_mode & 0o777
+    except OSError:
+        mode = 0o600
+    tmp = credentials_path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(doc, fh, indent=2)
+    os.chmod(tmp, mode)
+    os.replace(tmp, credentials_path)
+
+    return {
+        "refreshed": True,
+        "expires_at": _iso(expires_at_ms / 1000),
+        "seconds_until_expiry": int(expires_at_ms / 1000 - now),
+        "backup": credentials_path + ".bak",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -249,16 +344,21 @@ def decide(snapshot: dict, max_utilization: float) -> dict:
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
-def gather(*, enrich: bool = True) -> dict:
+def gather(*, enrich: bool = True, auto_refresh: bool = False) -> dict:
     oauth = load_oauth()
     if token_expired(oauth):
-        # Refresh is not yet implemented (see services/usage-gate/README.md).
-        # Fail closed with an actionable message rather than sending a dead token.
-        raise UsageError(
-            "OAuth access token expired or expiring within "
-            f"{EXPIRY_BUFFER_S}s; run any `claude` command to refresh "
-            "~/.claude/.credentials.json, then retry."
-        )
+        if auto_refresh:
+            refresh_access_token()       # rotates + rewrites the credentials file
+            oauth = load_oauth()
+        else:
+            # Fail closed rather than send a dead token. Pass auto_refresh=True
+            # (CLI: --auto-refresh) for unattended use, or run any `claude`
+            # command to refresh ~/.claude/.credentials.json, then retry.
+            raise UsageError(
+                "OAuth access token expired or expiring within "
+                f"{EXPIRY_BUFFER_S}s; pass --auto-refresh or run any `claude` "
+                "command to refresh ~/.claude/.credentials.json, then retry."
+            )
     token = oauth["accessToken"]
     headers = fetch_ping_headers(token)
     endpoint = fetch_usage_endpoint(token) if enrich else None
@@ -271,10 +371,25 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-utilization", type=float, default=85.0,
                     help="percent-used cap used only when a status field is absent (default 85)")
     ap.add_argument("--no-enrich", action="store_true", help="skip the /api/oauth/usage call")
+    ap.add_argument("--auto-refresh", action="store_true",
+                    help="if the token is expired, refresh it (rewrites the credentials file)")
+    ap.add_argument("--refresh", action="store_true",
+                    help="refresh the OAuth token now and exit (DESTRUCTIVE: rotates + rewrites creds)")
+    ap.add_argument("--refresh-dry-run", action="store_true",
+                    help="show the refresh request without sending it or touching any file")
     args = ap.parse_args(argv)
 
+    if args.refresh or args.refresh_dry_run:
+        try:
+            result = refresh_access_token(dry_run=args.refresh_dry_run)
+        except UsageError as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
+            return 2
+        print(json.dumps({"ok": True, **result}, indent=2))
+        return 0
+
     try:
-        snapshot = gather(enrich=not args.no_enrich)
+        snapshot = gather(enrich=not args.no_enrich, auto_refresh=args.auto_refresh)
     except UsageError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
         return 2

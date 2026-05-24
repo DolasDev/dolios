@@ -10,6 +10,10 @@ exact reading that originally caused a wrong "capacity exhausted" refusal and
 asserts the gate now dispatches.
 """
 
+import json
+import os
+import tempfile
+
 import usage_gate as ug
 
 
@@ -85,6 +89,87 @@ def test_endpoint_scale_isolated_from_windows():
     assert snap["source"] == "headers+endpoint"
     assert snap["windows"]["five_hour"]["percent_used"] == 9.0  # from header, 0-1
     assert snap["endpoint_raw"]["five_hour"]["utilization"] == 10.0  # raw, 0-100
+
+
+# --------------------------------------------------------------------------- #
+# Token refresh — mocked HTTP + temp credentials file (no real network/creds)
+# --------------------------------------------------------------------------- #
+def _creds_file(tmp, *, refresh="rt-old", access="at-old", extra=None):
+    path = os.path.join(tmp, "creds.json")
+    oauth = {"accessToken": access, "refreshToken": refresh,
+             "expiresAt": 1, "subscriptionType": "max", "scopes": ["a"]}
+    if extra:
+        oauth.update(extra)
+    with open(path, "w") as fh:
+        json.dump({"claudeAiOauth": oauth}, fh)
+    os.chmod(path, 0o600)
+    return path
+
+
+def test_refresh_updates_credentials_atomically():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _creds_file(tmp)
+        poster = lambda body: {"access_token": "at-new", "refresh_token": "rt-new",
+                               "expires_in": 3600}
+        res = ug.refresh_access_token(credentials_path=path, poster=poster, now=1_000_000.0)
+        assert res["refreshed"]
+        doc = json.load(open(path))["claudeAiOauth"]
+        assert doc["accessToken"] == "at-new"
+        assert doc["refreshToken"] == "rt-new"                 # rotated
+        assert doc["expiresAt"] == int((1_000_000.0 + 3600) * 1000)  # ms
+        assert doc["subscriptionType"] == "max"                # preserved
+        assert os.path.exists(path + ".bak")                   # backup made
+        assert oct(os.stat(path).st_mode & 0o777) == "0o600"   # perms kept
+
+
+def test_refresh_request_body_shape():
+    captured = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _creds_file(tmp, refresh="rt-xyz")
+        def poster(body):
+            captured.update(body)
+            return {"access_token": "a", "expires_in": 1}
+        ug.refresh_access_token(credentials_path=path, poster=poster, now=0)
+    assert captured["grant_type"] == "refresh_token"
+    assert captured["refresh_token"] == "rt-xyz"
+    assert captured["client_id"] == ug.OAUTH_CLIENT_ID
+
+
+def test_refresh_dry_run_sends_nothing_and_redacts():
+    sent = []
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _creds_file(tmp)
+        before = open(path).read()
+        out = ug.refresh_access_token(
+            credentials_path=path, poster=lambda b: sent.append(b), dry_run=True)
+        assert out["dry_run"] and out["body"]["refresh_token"] == "<redacted>"
+        assert sent == []                       # never called the endpoint
+        assert open(path).read() == before      # file untouched
+
+
+def test_refresh_missing_refresh_token_errors():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _creds_file(tmp, refresh=None)
+        try:
+            ug.refresh_access_token(credentials_path=path, poster=lambda b: {})
+        except ug.UsageError as exc:
+            assert "refreshToken" in str(exc)
+        else:
+            raise AssertionError("expected UsageError")
+
+
+def test_refresh_bad_response_leaves_file_intact():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _creds_file(tmp)
+        before = open(path).read()
+        try:
+            ug.refresh_access_token(credentials_path=path,
+                                    poster=lambda b: {"error": "nope"})
+        except ug.UsageError:
+            pass
+        else:
+            raise AssertionError("expected UsageError")
+        assert open(path).read() == before      # no partial write before access check
 
 
 def _run_standalone():

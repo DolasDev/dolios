@@ -81,13 +81,30 @@ subscription tokens only resolve models Claude Code itself uses.
 `--decide` wraps this in `{ "decision": "dispatch"|"hold", "reason", ...,
 "snapshot" }` and sets exit code 1 on `hold`.
 
-## Known limitations / open work
+## Token refresh
 
-- **Token refresh is not implemented.** If the access token is expired (or
-  within 5 min of expiry), the gate fails closed with an actionable message:
-  run any `claude` command to refresh the credentials file, then retry. For
-  truly unattended operation, implement the OAuth `refresh_token` grant using
-  the `refreshToken`/`expiresAt` fields already in the credentials file.
+For unattended operation the gate can refresh the OAuth token itself:
+
+```sh
+python3 usage_gate.py --refresh-dry-run   # show the request; send/write nothing
+python3 usage_gate.py --refresh           # DESTRUCTIVE: rotate + rewrite creds
+python3 usage_gate.py --decide --auto-refresh   # refresh only if expired, then check
+```
+
+It POSTs a `refresh_token` grant to `https://api.anthropic.com/v1/oauth/token`
+(the `console.anthropic.com` endpoint is behind a Cloudflare challenge that
+blocks programmatic clients) with Claude Code's public `client_id`. On success
+it **rotates** the refresh token and **rewrites `~/.claude/.credentials.json`** —
+so it backs up the old file to `.credentials.json.bak` first and writes the new
+one atomically (temp file + rename) at `0600`. A bad/empty response aborts
+*before* any write, leaving the file intact.
+
+> ⚠️ This rotates your real Claude credentials. The endpoint and `client_id` are
+> undocumented. Validate with `--refresh-dry-run` first; run a real `--refresh`
+> only when you're ready. Logic is unit-tested with a mocked endpoint + temp
+> file (`test_usage_gate.py`); the dry-run is verified against the real file.
+
+## Known limitations / open work
 - The `/api/oauth/usage` endpoint is **undocumented** and can change without
   notice. The gate degrades gracefully (headers alone are sufficient).
 - The ping consumes a negligible slice of quota (`max_tokens: 1`); it is itself
