@@ -118,6 +118,7 @@ hermes --tui                        # or run a specific profile
 ├── docker-compose.yml      # Host stack: Postgres (fleet state)
 ├── MODEL_OPTIONS.md        # Local-model decision + local-vs-OpenRouter tradeoff
 ├── ROADMAP.md              # Phased plan toward the fleet
+├── HOST_BRINGUP.md         # Ordered checklist to stand the fleet up on the host
 ├── employees/              # Checked-in employee specs (one dir per role)
 │   ├── autonomous-coder/   #   SOUL.md + config.yaml + env.example
 │   └── sim-mover/          #   (stub — blocked on Pegasus jobs)
