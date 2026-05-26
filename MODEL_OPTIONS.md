@@ -165,7 +165,7 @@ echo "qwen3.6:35b-a3b" >> infra/ollama/models.txt   # or edit the file
 make llm-up                                          # pulls it
 make llm-logs                                        # watch model-puller exit
 
-# on the host
+# on dolo-docker (where the agents run)
 hermes model        # Custom Endpoint → http://dolo-llm:11434/v1 → qwen3.6:35b-a3b
 ```
 

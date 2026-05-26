@@ -1,26 +1,37 @@
 # Host bring-up
 
 Everything in this repo is built and unit-tested on a dev box, but the live
-fleet runs on the **host** (the RTX-3060 machine with `hermes-agent`). This is
-the ordered checklist that threads the Phase 1–3 steps from
-[`ROADMAP.md`](ROADMAP.md) into one sequence you run on the host.
+fleet runs across **two machines**:
 
-Each step is gated by the one before it — don't enable the autonomous loop until
-the manual steps pass.
+- **dolo-llm** (RTX 3060) — serves the model only.
+- **dolo-docker** — runs the hermes-agents, the `services/`, and Postgres.
 
-## 0. Prerequisites (host)
+This is the ordered checklist threading the Phase 1–3 steps from
+[`ROADMAP.md`](ROADMAP.md). Each step label says **which machine** to run it on,
+and each is gated by the one before — don't enable the autonomous loop until the
+manual steps pass.
 
-- [ ] `hermes-agent` installed (`hermes --version`) — see [README](README.md#3-install-hermes-agent-on-the-host).
+## 0. Prerequisites
+
+On **dolo-llm**:
+- [ ] `docker` available and the RTX 3060 visible (`nvidia-smi`).
+- [ ] This repo checked out (for `make llm-*` / `gpu-stack.sh`).
+
+On **dolo-docker**:
+- [ ] `hermes-agent` installed (`hermes --version`) — see [README](README.md#3-install-hermes-agent-on-dolo-docker).
 - [ ] Claude Code installed (`claude --version`) and logged in (creates
       `~/.claude/.credentials.json`).
 - [ ] `gh` installed and authed (`gh auth status`) — for opening PRs.
-- [ ] `docker` available; dolo-llm reachable on the LAN (`curl http://dolo-llm:11434/api/tags`).
-- [ ] Python 3 (the gate/dispatcher are stdlib + pyyaml only).
+- [ ] `docker` + Python 3 (gate/dispatcher are stdlib + pyyaml); this repo and
+      the target repo checkouts present.
+- [ ] dolo-llm reachable on the LAN (`curl http://dolo-llm:11434/api/tags`).
 
-## 1. Local model + Postgres
+## 1. Local model (dolo-llm) + Postgres (dolo-docker)
 
 - [ ] On **dolo-llm**: `make llm-up` then `make llm-logs` (wait for the puller to exit).
-- [ ] On the **host**: `make env` (edit secrets in `.env`), then `make up` (Postgres).
+- [ ] On **dolo-docker**: `make env` (edit secrets in `.env`), then `make up` (Postgres).
+
+> Steps 2–6 all run on **dolo-docker**.
 
 ## 2. Capacity gate (services/usage-gate)
 

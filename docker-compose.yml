@@ -1,8 +1,8 @@
-# Host stack: Postgres only.
+# dolo-docker stack: Postgres only.
 #
-# `hermes-agent` runs natively on the host (see README), and the LLM lives on
-# the dolo-llm machine via compose.dolo-llm.yml. Postgres is here for future
-# state — agent memory, MCP tool servers, etc. — and starts empty.
+# Runs on dolo-docker alongside the hermes-agents (the LLM lives separately on
+# dolo-llm via compose.dolo-llm.yml). Postgres is here for fleet state — registry,
+# task/run history, agent memory, MCP tool servers, etc. — and starts empty.
 services:
   db:
     image: postgres:16
