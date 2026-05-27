@@ -44,11 +44,12 @@ Two machines on the LAN, with distinct jobs:
   employee), in Docker. Here you materialize employee specs into
   `~/.hermes/profiles/<role>/`, run the `services/` (the spare-capacity gate and
   the coder dispatcher), and host the fleet **Postgres** (`docker-compose.yml`).
-  The coder dispatcher needs `claude` + `gh` + the target repo checkouts here.
+  The agent image bakes in `claude` + `gh` for the dispatcher (see
+  [`infra/hermes/`](infra/hermes/)); the target repo checkouts are mounted in.
   Agents reach the model over the LAN at `http://dolo-llm:11434/v1`.
 
 The local model on dolo-llm runs no agent logic; all employee runtime — hermes,
-tools, dispatch, state — lives on dolo-docker.
+tools, dispatch, state — lives on dolo-docker, containerized.
 
 ### Model providers — local *or* OpenRouter, per employee
 
@@ -91,12 +92,19 @@ make env           # creates .env from .env.example; edit secrets
 make up
 ```
 
-### 3. Install hermes-agent (on dolo-docker)
+### 3. Build the agent image (on dolo-docker)
+
+Employees run as **containers** — a thin layer over Nous's official image (see
+[`infra/hermes/`](infra/hermes/)). `make up` builds it on first run, or build
+explicitly:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
-source ~/.bashrc   # or ~/.zshrc
+docker compose build hermes-autonomous-coder
 ```
+
+A native `hermes` install is **no longer required** — the container is the
+runtime, and `make employee` works without it. (You may still `curl … |
+install.sh` it as a host admin CLI for profile management if you like.)
 
 ### 4. Materialize an employee (on dolo-docker)
 
@@ -111,7 +119,12 @@ its `.env`. See [`employees/`](employees/) and [`HOST_BRINGUP.md`](HOST_BRINGUP.
 ### 5. Run it (on dolo-docker)
 
 ```sh
-hermes -p autonomous-coder chat -q "who are you?"   # or: hermes -p <role> --tui
+make up              # starts Postgres + the autonomous-coder container
+make coder-logs      # follow the agent
+# One-shot / interactive, on demand (the run command overrides the service's, so
+# pass --profile explicitly; it's honoured anywhere after the subcommand):
+docker compose run --rm hermes-autonomous-coder chat -q "who are you?" --profile autonomous-coder
+docker compose run --rm hermes-autonomous-coder --tui --profile autonomous-coder
 ```
 
 ## Layout
@@ -127,6 +140,7 @@ hermes -p autonomous-coder chat -q "who are you?"   # or: hermes -p <role> --tui
 │   ├── autonomous-coder/   #   SOUL.md + config.yaml + env.example
 │   └── sim-mover/          #   (stub — blocked on Pegasus jobs)
 ├── infra/
+│   ├── hermes/             # Containerized hermes-agent runtime (Dockerfile + README)
 │   ├── ollama/models.txt   # Models the dolo-llm Ollama instance will pull
 │   └── gpu-stack.sh        # Free the GPU + serve our model (up/down/status)
 ├── scripts/

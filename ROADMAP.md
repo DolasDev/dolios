@@ -26,13 +26,13 @@ Make "pick local or external per employee" real and tested.
       `config.yaml` snippets (OpenRouter-primary and fallback) in `MODEL_OPTIONS.md`.
 - ✅ Secret handling documented: `OPENROUTER_API_KEY` in each profile's
       `~/.hermes/profiles/<role>/.env` (via `env.example`), **never** in this repo.
-- [ ] **Host smoke-test** (needs hermes installed + a real key — can't run on the
-      dev box). On the host:
+- [ ] **Host smoke-test** (needs the agent image + a real key — can't run on the
+      dev box). On dolo-docker:
   1. Put `OPENROUTER_API_KEY=sk-or-…` in `~/.hermes/profiles/autonomous-coder/.env`.
   2. Temporarily set `model.provider: openrouter` /
      `default: openrouter/qwen/qwen3-235b-a22b-2507`; run
-     `hermes -p autonomous-coder chat -q "call a tool"` → confirm a real call +
-     tool-calling works. **Confirm the `openrouter/` prefix convention here.**
+     `docker compose run --rm hermes-autonomous-coder chat -q "call a tool" --profile autonomous-coder`
+     → confirm a real call + tool-calling works. **Confirm the `openrouter/` prefix here.**
   3. Restore local primary; stop dolo-llm Ollama (`make llm-down`) and run again →
      confirm it **fails over** to the OpenRouter fallback.
   4. Bring Ollama back up; confirm it prefers local again.

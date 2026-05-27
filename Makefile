@@ -1,7 +1,7 @@
 # Convenience targets for the dolios stack.
 #
-# Host stack (`up`, `down`, `logs`, `ps`) is just Postgres now.
-# `hermes-agent` itself runs natively on the host — see README.
+# Host stack (`up`, `down`, `logs`, `ps`) is Postgres + the containerized
+# hermes-agent employees (see infra/hermes/ and docker-compose.yml).
 # `llm-*` targets operate on the dolo-llm stack and are intended to be run
 # *on the dolo-llm machine itself* after this repo is checked out there.
 #
@@ -11,7 +11,7 @@
 
 SWITCH := ./infra/gpu-stack.sh
 
-.PHONY: up down restart logs ps env \
+.PHONY: up down restart logs coder-logs ps env \
         llm-up llm-down llm-logs llm-ps gpu-status \
         usage usage-decide usage-test employee \
         coder-preflight coder-test
@@ -26,6 +26,10 @@ restart: down up
 
 logs:
 	docker compose logs -f
+
+# Follow just the autonomous-coder container.
+coder-logs:
+	docker compose logs -f hermes-autonomous-coder
 
 ps:
 	docker compose ps

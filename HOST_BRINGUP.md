@@ -18,12 +18,15 @@ On **dolo-llm**:
 - [ ] This repo checked out (for `make llm-*` / `gpu-stack.sh`).
 
 On **dolo-docker**:
-- [ ] `hermes-agent` installed (`hermes --version`) — see [README](README.md#3-install-hermes-agent-on-dolo-docker).
-- [ ] Claude Code installed (`claude --version`) and logged in (creates
-      `~/.claude/.credentials.json`).
-- [ ] `gh` installed and authed (`gh auth status`) — for opening PRs.
-- [ ] `docker` + Python 3 (gate/dispatcher are stdlib + pyyaml); this repo and
-      the target repo checkouts present.
+- [ ] `docker` available; this repo checked out. Build the agent image (`make up`
+      builds it, or `docker compose build hermes-autonomous-coder`). No native
+      `hermes` install needed — the container is the runtime.
+- [ ] Claude Code logged in on the host (`~/.claude/.credentials.json` present) —
+      it's mounted into the container, and the usage gate reads it too.
+- [ ] `GH_TOKEN` in the profile `.env` (for PRs) — `gh` runs inside the image, so
+      no host gh install/auth needed. See [env.example](employees/autonomous-coder/env.example).
+- [ ] Python 3 on the host (gate/dispatcher are stdlib + pyyaml); the target repo
+      checkouts present (mounted into the agent for the dispatcher).
 - [ ] dolo-llm reachable on the LAN (`curl http://dolo-llm:11434/api/tags`).
 
 ## 1. Local model (dolo-llm) + Postgres (dolo-docker)
@@ -48,16 +51,16 @@ On **dolo-docker**:
 - [ ] `DRY_RUN=1 make employee ROLE=autonomous-coder` (review the plan).
 - [ ] `make employee ROLE=autonomous-coder`.
 - [ ] Confirm `~/.hermes/profiles/autonomous-coder/` has `SOUL.md`, `config.yaml`, `.env`.
-- [ ] `hermes -p autonomous-coder chat -q "who are you?"` → identity reflects SOUL.md,
-      and the request hits the **local** model on dolo-llm.
+- [ ] `docker compose run --rm hermes-autonomous-coder chat -q "who are you?" --profile autonomous-coder`
+      → identity reflects SOUL.md, and the request hits the **local** model on dolo-llm.
 
 ## 4. OpenRouter provider path (Phase 1 smoke + fallback)
 
 - [ ] Put `OPENROUTER_API_KEY=sk-or-…` in `~/.hermes/profiles/autonomous-coder/.env`.
 - [ ] **Confirm the slug prefix:** temporarily set `model.provider: openrouter` /
       `default: openrouter/qwen/qwen3-235b-a22b-2507`; run
-      `hermes -p autonomous-coder chat -q "call a tool"` → real call + tool-calling
-      works. (If the `openrouter/` prefix is rejected, drop it.)
+      `docker compose run --rm hermes-autonomous-coder chat -q "call a tool" --profile autonomous-coder`
+      → real call + tool-calling works. (If the `openrouter/` prefix is rejected, drop it.)
 - [ ] Restore local primary. **Fallback test:** `make llm-down` on dolo-llm, run a
       prompt → confirm it fails over to the OpenRouter fallback; `make llm-up` →
       confirm it prefers local again.

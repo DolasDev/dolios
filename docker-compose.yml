@@ -1,8 +1,9 @@
-# dolo-docker stack: Postgres only.
+# dolo-docker stack: fleet Postgres + the containerized hermes-agent employees.
 #
-# Runs on dolo-docker alongside the hermes-agents (the LLM lives separately on
-# dolo-llm via compose.dolo-llm.yml). Postgres is here for fleet state — registry,
-# task/run history, agent memory, MCP tool servers, etc. — and starts empty.
+# Runs on dolo-docker (the LLM lives separately on dolo-llm via
+# compose.dolo-llm.yml). Postgres holds fleet state — registry, task/run history,
+# agent memory, etc. The hermes-* services run the employee profiles, reaching
+# the model over the LAN at http://dolo-llm:11434/v1.
 services:
   db:
     image: postgres:16
@@ -20,6 +21,52 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # The autonomous-coder employee, containerized (see infra/hermes/Dockerfile).
+  # Profile spec + state live on the host under ~/.hermes (materialized by
+  # `make employee ROLE=autonomous-coder`); the container mounts it, so the host
+  # stays the source of truth and the image stays stateless.
+  hermes-autonomous-coder:
+    build:
+      context: ./infra/hermes
+    image: dolios-hermes:latest
+    container_name: hermes-autonomous-coder
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # dolo-llm is a Tailscale node; a bridged container does NOT inherit the
+    # host's MagicDNS, so map the tailnet IP explicitly (routing goes
+    # container -> host -> tailscale0). Update if dolo-llm's tailnet IP changes.
+    extra_hosts:
+      - "dolo-llm:100.69.252.113"
+    environment:
+      # Remap the in-container hermes user to the host owner of ~/.hermes (steve,
+      # 1000), so files created in the container stay host-readable/writable.
+      - HERMES_UID=1000
+      - HERMES_GID=1000
+    # Profile secrets (OPENROUTER_API_KEY for fallback; GH_TOKEN for the PR path).
+    env_file:
+      - ${HOME}/.hermes/profiles/autonomous-coder/.env
+    volumes:
+      # hermes data home: profiles, global config, skills, sessions, state.
+      # HERMES_HOME=/opt/data in the base image.
+      - ${HOME}/.hermes:/opt/data
+      # Claude Code credentials. Container HOME is /opt/data, so claude reads
+      # /opt/data/.claude/.credentials.json. RW so OAuth token refresh persists.
+      - ${HOME}/.claude:/opt/data/.claude
+      # TODO(coder, Phase 3 / HOST_BRINGUP step 5): mount the allowlisted repo
+      # checkouts the dispatcher works on and opens PRs from, e.g.:
+      # - ${HOME}/repos:/opt/data/repos
+    # Always-on supervisor, scoped to this employee. `--profile` is honoured by
+    # hermes wherever it appears in argv (it sets HERMES_HOME in-process, after
+    # the s6 cont-init hooks have run against /opt/data) — we can't lead with a
+    # `-p` flag because main-wrapper.sh routes on the first arg. With no
+    # messaging adapters and the coder_loop cron still commented in config.yaml,
+    # the gateway just idles; it becomes the scheduler once Phase 3/6 enable the
+    # loop. Validate the image on demand with:
+    #   docker compose run --rm hermes-autonomous-coder chat -q "who are you?" --profile autonomous-coder
+    command: ["gateway", "run", "--profile", "autonomous-coder"]
 
 volumes:
   pgdata:
