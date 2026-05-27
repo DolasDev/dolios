@@ -134,8 +134,12 @@ orchestrator role.
   top_k 20`; non-thinking `temperature 0.7, top_p 0.8, top_k 20`. For agentic
   tool-calling, bias lower temp for determinism. **Do not use greedy decoding
   in thinking mode.**
-- **Context:** don't set `num_ctx` to 262K — the KV cache would balloon. Start
-  ~32–40K; raise only if a task needs it.
+- **Context:** don't set `num_ctx` to 262K — the KV cache would balloon. But
+  hermes-agent enforces a **64K floor**, so we run **64Ki (65536)** — set both
+  server-side (`OLLAMA_CONTEXT_LENGTH` in `compose.dolo-llm.yml`, since Ollama's
+  4096 default would otherwise truncate) and per-employee (`context_length` in
+  each `config.yaml`); the two must match. KV cache ≈ 96KiB/token (~6.4GB at
+  64Ki), which the 48GB system RAM absorbs. Raise only if a task needs it.
 - **Fallback variant:** if 3.6's tool-call template misbehaves on your Ollama
   version, drop to **`qwen3.5:35b`** — same 35B-A3B MoE, same text-only profile,
   slightly older/weaker. Strict-dominated by 3.6 otherwise.

@@ -14,7 +14,9 @@ model:
   provider: "custom"
   base_url: "http://dolo-llm:11434/v1"
   api_key: "ollama"          # any non-empty string; Ollama ignores it
-  context_length: 40960      # capped per MODEL_OPTIONS (don't use the full 262K)
+  context_length: 65536      # 64Ki: meets hermes-agent's 64K floor; capped well
+                             # below the model's 262K (KV cache cost) per MODEL_OPTIONS.
+                             # Must match OLLAMA_CONTEXT_LENGTH in compose.dolo-llm.yml.
   # Resilience: if dolo-llm is unreachable, fall back to the same model family
   # (just bigger) on OpenRouter, so failover doesn't change how the agent acts.
   # Requires OPENROUTER_API_KEY in this profile's .env (see env.example).

@@ -21,6 +21,12 @@ services:
     environment:
       OLLAMA_KEEP_ALIVE: 24h
       OLLAMA_HOST: 0.0.0.0:11434
+      # Serve a 64Ki window. Ollama's default is only 4096, which would silently
+      # truncate prompts regardless of what a client requests; hermes-agent also
+      # refuses any model under a 64K window. Must match `context_length` in the
+      # employee config.yaml files. KV cache grows with this (~96KiB/token →
+      # ~6.4GB at 64Ki); 48GB system RAM absorbs the spill. See MODEL_OPTIONS.md.
+      OLLAMA_CONTEXT_LENGTH: "65536"
     deploy:
       resources:
         reservations:

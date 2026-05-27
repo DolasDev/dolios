@@ -11,7 +11,7 @@ model:
   provider: "custom"
   base_url: "http://dolo-llm:11434/v1"
   api_key: "ollama"
-  context_length: 40960
+  context_length: 65536      # 64Ki — meets hermes-agent's 64K floor (see autonomous-coder)
 
 agent:
   max_turns: 90
