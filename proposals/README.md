@@ -24,16 +24,34 @@ Four explicit states encoded in YAML frontmatter at the top of each proposal:
 
 ```yaml
 ---
+id:     dolios/2026-05-28-adopt-github-actions-ci   # canonical id; matches the filename stem
 status: proposed | approved | implementing | done | abandoned
 repo:   dolios
-audit:  .dolios/metrics/dolios/history.jsonl#<git-sha-of-source-audit>
-metrics: [test_coverage_percent, ci_test_duration_seconds]
-frameworks: ["DORA: Test automation", "SPACE: Efficiency"]
+audit:  .dolios/metrics/dolios/history.jsonl#L1@2026-05-28T20:16:11Z
+gap_ids: [ci-7a3f9b2c1d]
+metrics: [ci.github_actions_present, ci.workflow_count]
+frameworks: ["DORA: Continuous Integration", "DORA: Test automation"]
 opened:    2026-05-28
 approved:  null
 done:      null
 ---
 ```
+
+### Field semantics
+
+- **`id`** — canonical identifier, format `<repo>/<filename-stem>` (no `.md`).
+  Written explicitly so renaming the file doesn't orphan execution PRs that
+  cite it. The dispatcher tags every execution PR and branch with this id.
+- **`audit`** — `<path>#L<n>@<audited_at>` where `<n>` is the 1-based JSONL
+  line number of the audit row this proposal cites, and `<audited_at>` is the
+  row's ISO-8601 timestamp. Both, so a future audit row appended to the same
+  file is unambiguously a different reference. The previous "sha" form was
+  ambiguous between the audited-HEAD sha and the introducing-commit sha.
+- **`gap_ids`** — the stable `gap_id`s from the audit row's `gaps` array that
+  this proposal targets. Lets the picker tell "this gap is now covered by an
+  open proposal" without string-matching summaries.
+- **`metrics`** — every metric the Outcome will report on, in the order the
+  Outcome table will list them.
 
 | State | Set by | What it means |
 |---|---|---|

@@ -72,6 +72,39 @@ def test_gap_messages_cite_framework_anchors():
                        for fw in gap["frameworks"]), gap
 
 
+def test_every_gap_has_a_stable_id():
+    """gap_id must be present, area-prefixed, and identical across runs for the
+    same (area, summary) — that's what makes proposals reference-stable."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        _init_git(repo, commits=[("a.py", "x = 1\n")])
+        snap_a, snap_b = _run(repo), _run(repo)
+        for g in snap_a["gaps"]:
+            assert g.get("gap_id"), g
+            assert g["gap_id"].startswith(g["area"] + "-"), g
+        # Same audit → same gap_ids, position-independent.
+        ids_a = {g["gap_id"] for g in snap_a["gaps"]}
+        ids_b = {g["gap_id"] for g in snap_b["gaps"]}
+        assert ids_a == ids_b
+
+
+def test_not_measured_is_a_structured_list_at_snapshot_root():
+    """V0's deferred metrics live at snap['not_measured'] with path/tool/needs
+    fields, so the picker doesn't have to grep free-text `_note`s."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        _init_git(repo, commits=[("a.py", "x = 1\n")])
+        snap = _run(repo)
+        nm = snap.get("not_measured")
+        assert isinstance(nm, list) and nm
+        for entry in nm:
+            assert set(entry.keys()) >= {"path", "tool", "needs"}, entry
+        # Spot-check: the CI metrics the first proposal calls out are present.
+        paths = {e["path"] for e in nm}
+        assert "ci.test_runs_on_pr" in paths
+        assert "testing.coverage_percent" in paths
+
+
 # --------------------------------------------------------------------------- #
 # CI presence flips the gap
 # --------------------------------------------------------------------------- #

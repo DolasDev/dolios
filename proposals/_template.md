@@ -1,7 +1,17 @@
 ---
+id:     <repo-slug>/YYYY-MM-DD-<slug>   # canonical id; must match the filename stem.
+                                        # Written explicitly so renaming the file
+                                        # doesn't orphan execution PRs that cite it.
 status: proposed              # proposed | approved | implementing | done | abandoned
-repo:   <repo-slug>           # e.g. dolios, pegasus
-audit:  .dolios/metrics/<repo-slug>/history.jsonl#<git-sha-of-source-audit>
+repo:   <repo-slug>            # e.g. dolios, pegasus
+audit:  .dolios/metrics/<repo-slug>/history.jsonl#L<n>@<audited_at>
+                              # <n>           — 1-based JSONL line number of the row
+                              # <audited_at>  — that row's `audited_at` ISO-8601 timestamp
+                              # both for human readability and so a future audit
+                              # row appended to the same file is unambiguously a
+                              # different reference.
+gap_ids:                      # which specific audit gaps this targets (stable ids
+  - <gap_id>                  #  emitted by the auditor; e.g. ci-7a3f9b2c1d)
 metrics:                      # which metrics from the audit this targets
   - <metric_path>             # e.g. ci.github_actions_present, testing.coverage_percent
 frameworks:                   # at least one — see docs/metrics.md
@@ -88,6 +98,10 @@ over alternatives. Cite the specific URLs / docs / scorecards consulted.
 
 > *Populated at `done` time, as a follow-up PR. Until then, this section
 > reads: "TBD — appended after the re-measure step."*
+
+The Outcome table has **one row per `metrics:` frontmatter entry, in the same
+order** — so a parser can zip the two lists. Add rows for guard metrics if the
+Measurement plan calls them out, marked `(guard)`.
 
 | Metric | Baseline | Post-execution | Δ | Target | Verdict |
 |---|---|---|---|---|---|

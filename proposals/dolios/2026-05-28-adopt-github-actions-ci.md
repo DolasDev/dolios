@@ -1,12 +1,16 @@
 ---
+id:     dolios/2026-05-28-adopt-github-actions-ci
 status: proposed
 repo:   dolios
-audit:  .dolios/metrics/dolios/history.jsonl#bf0e8899f5adb483808c178a6159fb4c0e1f85d9
+audit:  .dolios/metrics/dolios/history.jsonl#L2@2026-05-28T21:17:28Z
+gap_ids:
+  - ci-14fbad1f48
 metrics:
   - ci.github_actions_present
   - ci.workflow_count
   - ci.test_runs_on_pr
   - ci.median_runtime_seconds
+  - ci.success_rate_30d                # new metric introduced by chunk 3
 frameworks:
   - "DORA: Continuous Integration"
   - "DORA: Deployment Automation"
@@ -40,14 +44,15 @@ budget to defend.
 
 ## Audit citation
 
-- **Audit row:** `.dolios/metrics/dolios/history.jsonl` line 1, introduced at
-  git sha `bf0e8899f5adb483808c178a6159fb4c0e1f85d9`
-  (`feat(discovery): deterministic auditor + proposal lifecycle scaffolding`),
-  `audited_at: 2026-05-28T20:16:11Z`, `git_head:
-  07c9a5b561251008e4d857f560a07cbd1708e92a`.
-- **Gap targeted:** `ci` / "No CI workflows detected" (severity: **high**).
-  Verbatim from the audit row: *"No .github/workflows/\*.yml and no other CI
-  config — there is no automated test/lint/security signal on PRs."*
+- **Audit row:** `.dolios/metrics/dolios/history.jsonl` line 2,
+  `audited_at: 2026-05-28T21:17:28Z` — the first row to carry the structured
+  `gap_id` and `not_measured` fields (row 1 from the initial baseline carries
+  identical findings without the structured ids, as it predates the scaffold
+  fix). Citing the structured row so the `gap_ids:` reference resolves.
+- **Gap targeted:** `gap_id: ci-14fbad1f48` — `ci` / "No CI workflows
+  detected" (severity: **high**). Verbatim from the audit row: *"No
+  .github/workflows/\*.yml and no other CI config — there is no automated
+  test/lint/security signal on PRs."*
 - **Frameworks:**
   - **DORA: Continuous Integration.** dora.dev defines CI as the practice
     that drives "higher deployment frequency, more stable systems, and higher

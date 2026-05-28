@@ -26,6 +26,7 @@ Exit codes: 0 on success; 2 on a bad repo path.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -36,6 +37,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 1
+
+# Metrics deliberately not measured by V0 (no external tools / no API access).
+# Surfaced as a structured top-level field so proposals and the picker can
+# reason about them programmatically — replaces the free-text `_note` fields
+# that the first proposal had to hand-quote. Adopting any of these tools is
+# its own proposal.
+NOT_MEASURED = [
+    {"path": "ci.test_runs_on_pr",         "tool": "GitHub Actions API",   "needs": "GH_TOKEN env"},
+    {"path": "ci.median_runtime_seconds",  "tool": "GitHub Actions API",   "needs": "GH_TOKEN env"},
+    {"path": "testing.coverage_percent",   "tool": "coverage.py",          "needs": "test runner integration"},
+    {"path": "testing.flake_rate",         "tool": "CI re-run analysis",   "needs": "CI history"},
+    {"path": "docs.doc_coverage_percent",  "tool": "interrogate",          "needs": "new dep"},
+    {"path": "security.real_secret_findings", "tool": "gitleaks",          "needs": "new dep"},
+    {"path": "security.openssf_scorecard_score", "tool": "scorecard-action", "needs": "CI"},
+    {"path": "dependencies.vulnerable_count", "tool": "osv-scanner",        "needs": "new dep"},
+]
 
 # How many days of history to scan for git-based metrics (commit cadence, sizes).
 LOOKBACK_DAYS = 90
@@ -282,6 +299,14 @@ def audit_repo_shape(repo: Path) -> dict:
 # --------------------------------------------------------------------------- #
 # Gap derivation — frames every finding against a named capability/framework
 # --------------------------------------------------------------------------- #
+def _gap_id(area: str, summary: str) -> str:
+    """Deterministic short id for a gap, so proposals can reference a specific
+    finding (`gap_id: ci-7a3f9b2c1d`) without depending on position in the
+    sorted list — which can shift as new gaps appear at the same severity."""
+    h = hashlib.sha256(f"{area}::{summary}".encode("utf-8")).hexdigest()[:10]
+    return f"{area}-{h}"
+
+
 def derive_gaps(metrics: dict) -> list[dict]:
     """Each gap names the framework capability it falls under, so proposals can
     cite the leading-indicator evidence (DORA Accelerate, OpenSSF Scorecard,
@@ -386,6 +411,9 @@ def derive_gaps(metrics: dict) -> list[dict]:
     # Stable order by severity then area, so audit diffs in PRs are readable.
     rank = {"high": 0, "medium": 1, "low": 2}
     gaps.sort(key=lambda g: (rank.get(g["severity"], 9), g["area"]))
+    # Stamp a stable id on each so proposals can reference the specific gap.
+    for g in gaps:
+        g["gap_id"] = _gap_id(g["area"], g["summary"])
     return gaps
 
 
@@ -412,6 +440,10 @@ def run(repo: Path, name: str) -> dict:
         "git_branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() or None,
         "metrics": metrics,
         "gaps": derive_gaps(metrics),
+        # Machine-readable list of metrics V0 doesn't compute, with the tool
+        # each one needs — replaces the free-text `_note` fields, lets the
+        # picker pick "adopt tool X" proposals deterministically.
+        "not_measured": NOT_MEASURED,
     }
 
 
