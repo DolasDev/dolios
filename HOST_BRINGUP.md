@@ -54,16 +54,13 @@ On **dolo-docker**:
 - [ ] `docker compose run --rm hermes-autonomous-coder chat -q "who are you?" --profile autonomous-coder`
       → identity reflects SOUL.md, and the request hits the **local** model on dolo-llm.
 
-## 4. OpenRouter provider path (Phase 1 smoke + fallback)
+## 4. OpenRouter provider path — N/A under current policy
 
-- [ ] Put `OPENROUTER_API_KEY=sk-or-…` in `~/.hermes/profiles/autonomous-coder/.env`.
-- [ ] **Confirm the slug prefix:** temporarily set `model.provider: openrouter` /
-      `default: openrouter/qwen/qwen3-235b-a22b-2507`; run
-      `docker compose run --rm hermes-autonomous-coder chat -q "call a tool" --profile autonomous-coder`
-      → real call + tool-calling works. (If the `openrouter/` prefix is rejected, drop it.)
-- [ ] Restore local primary. **Fallback test:** `make llm-down` on dolo-llm, run a
-      prompt → confirm it fails over to the OpenRouter fallback; `make llm-up` →
-      confirm it prefers local again.
+**Skipped.** Fleet policy is **$0 marginal API spend**, so the supervisor does
+NOT fail over to OpenRouter (metered, outside the subscription). The fallback
+has been removed from `employees/autonomous-coder/config.yaml`; if dolo-llm is
+unreachable the supervisor halts cleanly until it returns. Re-enable only if
+the policy changes.
 
 ## 5. Coder dispatcher (Phase 3 manual run)
 

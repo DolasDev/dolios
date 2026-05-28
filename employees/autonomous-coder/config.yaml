@@ -9,7 +9,6 @@
 
 model:
   # Local qwen3.6 on dolo-llm — cheap, always-on supervisor (see MODEL_OPTIONS.md).
-  # Phase 1 may switch this to / add OpenRouter for heavier reasoning.
   default: "qwen3.6:35b-a3b"
   provider: "custom"
   base_url: "http://dolo-llm:11434/v1"
@@ -17,15 +16,11 @@ model:
   context_length: 65536      # 64Ki: meets hermes-agent's 64K floor; capped well
                              # below the model's 262K (KV cache cost) per MODEL_OPTIONS.
                              # Must match OLLAMA_CONTEXT_LENGTH in compose.dolo-llm.yml.
-  # Resilience: if dolo-llm is unreachable, fall back to the same model family
-  # (just bigger) on OpenRouter, so failover doesn't change how the agent acts.
-  # Requires OPENROUTER_API_KEY in this profile's .env (see env.example).
-  # Verified OpenRouter slug: qwen/qwen3-235b-a22b-2507 (tools=True, 262K ctx).
-  # hermes namespaces it with the `openrouter/` prefix per its config docs —
-  # confirm the prefix on the host during the Phase 1 smoke test.
-  fallback_providers:
-    - provider: "openrouter"
-      model: "openrouter/qwen/qwen3-235b-a22b-2507"
+  # No fallback_providers by design. Fleet policy is $0 marginal API spend —
+  # subscription-only for Claude Code, local model only for the supervisor.
+  # OpenRouter is metered and outside the subscription, so any failover there
+  # would directly violate that policy. If dolo-llm is unreachable, the
+  # supervisor halts cleanly until it returns — that's not urgent work.
 
 agent:
   max_turns: 90
