@@ -36,17 +36,26 @@ terminal:
   backend: "local"
   timeout: 180
 
-# The supervisor loop. The guardrailed dispatcher (services/coder/dispatch.py)
-# enforces gate + allowlist + branch + budget + PR-not-merge in code; this loop
-# only has the model PICK a task and call it. Left COMMENTED until host
-# validation (needs hermes + claude + gh) and token-refresh land — see
-# services/coder/README.md and ROADMAP Phase 3.
+# The nightly catch-up loop. The dispatcher (services/coder/dispatch.py) enforces
+# gate + allowlist + branch + PR-not-merge in code; the supervisor just picks a
+# task per tick. Left COMMENTED until token-refresh + an allowlisted repo land
+# (HOST_BRINGUP step 5) — see services/coder/README.md.
+#
+# Schedule: every 30 min from 03:00 to 11:30 UTC — a ~9-hour overnight burst
+# window (roughly 10pm EST → 6am EST). Each tick is a single dispatch; the
+# schedule itself provides the persistent catch-up across the 5h-window refill
+# (model A: we don't run a long-lived burst process, the cron does the looping).
+# The pacing math (linear weekly target = t·100%) lives in coder.yaml's
+# `gate.windows`; the dispatcher's preflight returns `binding_headroom_pct` so
+# the supervisor knows when it's at-pace and should exit early.
 # cron:
 #   coder_loop:
-#     schedule: "*/30 * * * *"   # every 30 min
+#     schedule: "0,30 3-11 * * *"
 #     prompt: >
-#       Pick one small backlog task from an allowlisted repo, then run
+#       Run `python3 services/coder/dispatch.py --preflight-only`. If decision
+#       is 'hold', report the reason and exit. Otherwise pick ONE small backlog
+#       task from an allowlisted repo and run
 #       `python3 services/coder/dispatch.py --repo <name> --task <id>
-#       --instructions "<what to do>"`. The dispatcher will refuse if the
-#       capacity gate holds, the repo isn't allowlisted, or the budget is spent.
-#       Report the resulting PR url or the refusal reason.
+#       --instructions "<what to do>"`. Prefer smaller tasks when
+#       binding_headroom_pct is small. Report the resulting PR url or the
+#       refusal reason; one task per tick.

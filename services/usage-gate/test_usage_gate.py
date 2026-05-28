@@ -80,6 +80,94 @@ def test_high_status_allowed_overrides_high_number_is_not_assumed():
     assert result["decision"] == "hold"
 
 
+# --------------------------------------------------------------------------- #
+# Pacing (per-window) decision path — the nightly catch-up model
+# --------------------------------------------------------------------------- #
+import time as _time
+
+# Aggressive default: weekly linear 0→100, 5h flat 95.
+PACING = {
+    "seven_day": {"floor": 0, "ceiling": 100, "k": 1},
+    "five_hour": {"floor": 95, "ceiling": 95, "k": 1},
+}
+
+
+def _reset_at(window_length_s, t):
+    """`-reset` header (epoch s) for a window of that length at elapsed-fraction t."""
+    return str(int(_time.time() + (1 - t) * window_length_s))
+
+
+def test_pacing_holds_when_at_or_ahead_of_weekly_pace():
+    """Mon AM (t≈0.05, target≈5%) with W_used=20% → ahead of pace, hold."""
+    snap = ug.normalize(_headers(
+        util_7d="0.20", util_5h="0.10",
+        reset_7d=_reset_at(7 * 86400, 0.05),
+        reset_5h=_reset_at(5 * 3600, 0.5),
+    ), None)
+    res = ug.decide(snap, windows=PACING)
+    assert res["decision"] == "hold", res
+    assert "pace target" in res["reason"]
+    assert res["headroom_by_window"]["seven_day"] < 0
+
+
+def test_pacing_dispatches_when_behind_pace_with_headroom():
+    """Sat (t≈0.85, target≈85%) with W_used=30% → 55% behind pace → dispatch."""
+    snap = ug.normalize(_headers(
+        util_7d="0.30", util_5h="0.10",
+        reset_7d=_reset_at(7 * 86400, 0.85),
+        reset_5h=_reset_at(5 * 3600, 0.5),
+    ), None)
+    res = ug.decide(snap, windows=PACING)
+    assert res["decision"] == "dispatch", res
+    # Binding headroom = min(seven_day, five_hour). 5h is 95-10=85; 7d ≈ 85-30=55.
+    assert 50 <= res["binding_headroom_pct"] <= 60
+    assert res["headroom_by_window"]["seven_day"] > 50
+    assert res["headroom_by_window"]["five_hour"] > 80
+
+
+def test_pacing_five_hour_flat_holds_at_ceiling():
+    """5h is floor==ceiling==95, so 96% used → hold regardless of weekly slack."""
+    snap = ug.normalize(_headers(
+        util_5h="0.96", util_7d="0.40",
+        reset_7d=_reset_at(7 * 86400, 0.7),
+        reset_5h=_reset_at(5 * 3600, 0.5),
+    ), None)
+    res = ug.decide(snap, windows=PACING)
+    assert res["decision"] == "hold", res
+    assert "five_hour" in res["reason"]
+
+
+def test_pacing_user_example_hour_150_of_168():
+    """User's example: at hour 150/168 (t=0.8929) target is 89.28%; W_used=88%
+    means the agent has ~1.28% headroom on the weekly window — dispatches."""
+    snap = ug.normalize(_headers(
+        util_7d="0.88", util_5h="0.20",
+        reset_7d=_reset_at(7 * 86400, 150 / 168),
+        reset_5h=_reset_at(5 * 3600, 0.5),
+    ), None)
+    res = ug.decide(snap, windows=PACING)
+    assert res["decision"] == "dispatch", res
+    # Weekly headroom: allow(0.8929) - 88 ≈ 89.28 - 88 = 1.28 (binding).
+    assert 1.0 <= res["headroom_by_window"]["seven_day"] <= 1.6
+
+
+def test_pacing_authoritative_rejected_overrides_headroom():
+    """Even with plenty of pacing slack, a 'rejected' status holds the gate."""
+    snap = ug.normalize(_headers(
+        util_5h="0.10", status_5h="rejected", overall="rejected", retry_after="900",
+    ), None)
+    res = ug.decide(snap, windows=PACING)
+    assert res["decision"] == "hold"
+    assert res["retry_after_seconds"] == 900
+
+
+def test_pacing_overage_status_surfaced():
+    """The overage status is exposed so callers can warn under the $0 policy."""
+    snap = ug.normalize(_headers(util_5h="0.10", util_7d="0.10"), None)
+    res = ug.decide(snap, windows=PACING)
+    assert res["overage_status"] in ("allowed", "rejected", None)
+
+
 def test_endpoint_scale_isolated_from_windows():
     """Endpoint utilization is 0-100; it must not contaminate the 0-100 windows
     (which we derived from 0-1 headers). Both end up percent, and the raw

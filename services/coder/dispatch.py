@@ -61,6 +61,10 @@ class Config:
     branch_prefix: str = "auto/coder"
     budget: Budget = field(default_factory=Budget)
     gate_max_utilization: float = 85.0
+    # Per-window pacing config (see services/usage-gate/usage_gate.decide).
+    # When set, the dispatcher uses pacing — that's the nightly catch-up model.
+    # `None` falls back to the flat `gate_max_utilization` threshold.
+    gate_windows: dict | None = None
 
     @classmethod
     def load(cls, path: str) -> "Config":
@@ -75,6 +79,7 @@ class Config:
         ledger = b.get("ledger_path", Budget.ledger_path)
         if not os.path.isabs(ledger):
             ledger = os.path.abspath(ledger)
+        gate_raw = raw.get("gate", {}) or {}
         return cls(
             allowlist=raw.get("allowlist", {}) or {},
             base_branch=raw.get("base_branch", "main"),
@@ -84,7 +89,8 @@ class Config:
                 max_cost_usd_per_5h=float(b.get("max_cost_usd_per_5h", 10.0)),
                 ledger_path=ledger,
             ),
-            gate_max_utilization=float(raw.get("gate", {}).get("max_utilization", 85.0)),
+            gate_max_utilization=float(gate_raw.get("max_utilization", 85.0)),
+            gate_windows=gate_raw.get("windows"),
         )
 
 
@@ -120,20 +126,27 @@ def _real_gh(args: list, cwd: str) -> str:
     ).stdout.strip()
 
 
-def _real_gate_decide(max_utilization: float) -> dict:
-    """Call the spare-capacity gate. Any failure is treated as 'hold' (fail closed)."""
+def _real_gate_decide(max_utilization: float, windows: dict | None) -> dict:
+    """Call the spare-capacity gate. Any failure is treated as 'hold' (fail closed).
+
+    Prefers per-window pacing when `windows` is configured (the nightly
+    catch-up model); falls back to the flat `max_utilization` threshold.
+    """
     sys.path.insert(0, os.path.join(HERE, "..", "usage-gate"))
     try:
         import usage_gate
         snapshot = usage_gate.gather(enrich=False)
-        return usage_gate.decide(snapshot, max_utilization)
+        return usage_gate.decide(snapshot, max_utilization=max_utilization,
+                                 windows=windows)
     except Exception as exc:  # gate unreachable / token expired → do not dispatch
         return {"decision": "hold", "reason": f"gate check failed: {exc}"}
 
 
 def default_runners(config: Config) -> Runners:
     return Runners(
-        gate_decide=lambda: _real_gate_decide(config.gate_max_utilization),
+        gate_decide=lambda: _real_gate_decide(
+            config.gate_max_utilization, config.gate_windows
+        ),
         git=_real_git,
         claude=_real_claude,
         gh=_real_gh,

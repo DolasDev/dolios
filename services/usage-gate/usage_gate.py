@@ -304,38 +304,110 @@ def normalize(headers: dict, endpoint: dict | None) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Decision
+# Decision — flat threshold (legacy) or per-window pacing
 # --------------------------------------------------------------------------- #
-def decide(snapshot: dict, max_utilization: float) -> dict:
+# Window lengths in seconds (for elapsed-fraction math). Matches the unified
+# rate-limit header names.
+WINDOW_LENGTH_S = {"five_hour": 5 * 3600, "seven_day": 7 * 86400}
+
+
+def _t_elapsed(win: dict, length_s: int) -> float | None:
+    """Fraction of the window elapsed, in [0, 1]. Derived from `resets_in_seconds`:
+    a window that resets in `length_s` is at t=0; one resetting in 0s is at t=1.
+    Returns None if the snapshot is missing the reset, so the caller can decide
+    how to fall back."""
+    resets_in = win.get("resets_in_seconds")
+    if resets_in is None:
+        return None
+    return max(0.0, min(1.0, 1.0 - resets_in / length_s))
+
+
+def _allow(t: float, floor: float, ceiling: float, k: float) -> float:
+    """Pacing curve: allow(t) = floor + (ceiling-floor) * t^k.
+
+    k=1 is linear — at hour 150/168 of the week the target is 89.28% used.
+    k>1 is convex (quiet early, ramps late); k<1 is concave (front-loaded).
+    Setting floor==ceiling collapses to a flat threshold (used for the 5h
+    window, which refills inside a single nightly burst).
+    """
+    return floor + (ceiling - floor) * (t ** k)
+
+
+def decide(
+    snapshot: dict,
+    max_utilization: float = 85.0,
+    windows: dict | None = None,
+) -> dict:
     """Translate a snapshot into dispatch/hold.
 
-    Prefers Anthropic's authoritative status fields; falls back to the
-    percent-used threshold only when a status field is missing.
+    Two modes (Anthropic's authoritative `-status` fields are honored in both):
+
+      • Legacy (`windows=None`): single percent threshold `max_utilization`
+        applied uniformly to every window.
+
+      • Pacing (`windows={...}`): per-window curve `allow(t) = floor +
+        (ceiling-floor)*t^k`, where t is the elapsed fraction of that window.
+        A window not listed in `windows` is skipped (only its `-status` is
+        honored — no numeric cap). Returns `binding_headroom_pct` =
+        `min(allow(t) - percent_used)` across listed windows, which the
+        dispatcher uses to drive the nightly catch-up loop.
     """
-    windows = snapshot["windows"]
+    snap_windows = snapshot["windows"]
     reasons: list[str] = []
+    headrooms: dict[str, float | None] = {}
     hold = False
 
     if snapshot.get("overall_status") == "rejected":
         hold = True
         reasons.append("overall unified status is 'rejected'")
 
-    for name, win in windows.items():
+    for name, win in snap_windows.items():
         status, used = win.get("status"), win.get("percent_used")
         if status == "rejected":
             hold = True
             reasons.append(f"{name} status is 'rejected'")
-        elif used is not None and used >= max_utilization:
+            headrooms[name] = 0.0
+            continue
+
+        if windows is not None and name in windows:
+            wcfg = windows[name]
+            length_s = WINDOW_LENGTH_S.get(name)
+            t = _t_elapsed(win, length_s) if length_s else None
+            if t is None:
+                t = 1.0  # conservative: no reset info → treat as end-of-window
+            allow = _allow(t, float(wcfg["floor"]), float(wcfg["ceiling"]),
+                           float(wcfg.get("k", 1.0)))
+            if used is not None:
+                headrooms[name] = round(allow - used, 2)
+                if used >= allow:
+                    hold = True
+                    reasons.append(
+                        f"{name} at {used}% used >= pace target "
+                        f"{allow:.1f}% (t={t:.2f}, k={wcfg.get('k', 1.0)})"
+                    )
+        elif windows is None and used is not None and used >= max_utilization:
             hold = True
             reasons.append(f"{name} at {used}% used (>= {max_utilization}% cap)")
 
-    binding = windows.get(snapshot.get("binding_window") or "", {})
+    valid_headrooms = [h for h in headrooms.values() if h is not None]
+    binding_headroom = min(valid_headrooms) if valid_headrooms else None
+
+    binding = snap_windows.get(snapshot.get("binding_window") or "", {})
     retry = snapshot.get("retry_after_seconds") or binding.get("resets_in_seconds")
+
+    # Overage exposure is informational — the $0-spend policy is enforced by
+    # setting `ceiling=100` on the weekly window so the gate holds before any
+    # overage path is needed. If `overage_status == 'allowed'`, the account
+    # COULD spill into metered overage; disable overage on the account too.
+    overage_status = snapshot.get("overage", {}).get("status")
 
     return {
         "decision": "hold" if hold else "dispatch",
         "reason": "; ".join(reasons) if reasons else "capacity available",
         "binding_window": snapshot.get("binding_window"),
+        "binding_headroom_pct": binding_headroom,
+        "headroom_by_window": headrooms,
+        "overage_status": overage_status,
         "retry_after_seconds": retry if hold else None,
         "snapshot": snapshot,
     }

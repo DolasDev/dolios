@@ -13,14 +13,34 @@ allowlist:
 base_branch: main          # the branch we branch OFF and target PRs at; never committed to directly
 branch_prefix: auto/coder  # work branches are <prefix>/<task_id>-<timestamp>
 
-# Hard budget caps (USD, from Claude Code's reported total_cost_usd). The
-# dispatcher refuses to start a run that would exceed these, and flags a run
-# whose cost exceeds the per-run cap.
+# Dollar caps. Fleet policy is $0 marginal spend (subscription-only), so on a
+# flat-fee subscription `total_cost_usd` is *notional* — not actual dollars.
+# These exist purely as runaway detection (per-run flag in the ledger); the
+# 5h cap is set astronomically so it never gates under the $0 policy. The
+# REAL "how much" control is the per-window pacing in `gate.windows` below.
 budget:
-  max_cost_usd_per_run: 2.00
-  max_cost_usd_per_5h: 10.00
-  ledger_path: services/coder/.ledger.jsonl   # run history for window accounting
+  max_cost_usd_per_run: 5.00         # flagged in ledger if exceeded; not abort
+  max_cost_usd_per_5h: 9999.00       # vestigial under $0 policy; never gates
+  ledger_path: services/coder/.ledger.jsonl
 
-# Spare-capacity gate threshold passed through to usage_gate --decide.
+# Per-window pacing — the nightly catch-up model.
+#
+#   allow(t) = floor + (ceiling-floor) * t^k        # t = elapsed fraction of window
+#   HOLD if W_used >= allow(t)
+#
+# seven_day uses a LINEAR target (k=1, floor 0, ceiling 100): at hour t·168 of
+# the week the target is t·100% used — e.g. at hour 150/168 (~Sat 6am) the
+# target is 89.28%. Aggressive ceiling at 100% because $0 policy means we'd
+# rather slam Anthropic's authoritative `rejected` than ride into metered
+# overage (we still hold on `rejected`, of course).
+#
+# five_hour is a FLAT 95% (floor==ceiling). It's just the inner-loop throttle:
+# the 5h window refills inside one nightly burst, so persistent catch-up across
+# refills is achieved by the cron firing repeatedly (see profile config.yaml).
 gate:
-  max_utilization: 85        # percent; only used if Anthropic's status field is absent
+  windows:
+    seven_day: { floor: 0,  ceiling: 100, k: 1 }
+    five_hour: { floor: 95, ceiling: 95,  k: 1 }
+  # Legacy fallback used only if `windows` is removed: flat percent threshold
+  # applied uniformly to every window.
+  max_utilization: 85

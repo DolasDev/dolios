@@ -79,7 +79,26 @@ subscription tokens only resolve models Claude Code itself uses.
 ```
 
 `--decide` wraps this in `{ "decision": "dispatch"|"hold", "reason", ...,
-"snapshot" }` and sets exit code 1 on `hold`.
+"binding_headroom_pct", "headroom_by_window", "overage_status", "snapshot" }`
+and sets exit code 1 on `hold`.
+
+## Decision modes — flat threshold vs per-window pacing
+
+`decide()` runs in one of two modes; Anthropic's authoritative `-status` is
+honored in both.
+
+- **Flat threshold (legacy).** Single `max_utilization` cap applied to every
+  window. What `make usage-decide` uses (default 85%).
+- **Per-window pacing (the nightly catch-up model).** Each window gets a
+  curve `allow(t) = floor + (ceiling-floor) · t^k` where `t` is its elapsed
+  fraction; hold if `percent_used ≥ allow(t)`. Returns
+  `binding_headroom_pct = min(allow(t) − percent_used)` so the dispatcher can
+  size or stop a burst. Drives the autonomous-coder's overnight cron — see
+  `services/coder/coder.example.yaml`'s `gate.windows` block and the worked
+  example (hour 150/168 → linear target 89.28%) in `test_usage_gate.py`.
+
+Pacing config lives in `coder.yaml`; the dispatcher passes it through. The
+gate CLI stays flat-threshold for ad-hoc use.
 
 ## Token refresh
 
