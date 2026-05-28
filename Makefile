@@ -14,7 +14,8 @@ SWITCH := ./infra/gpu-stack.sh
 .PHONY: up down restart logs coder-logs ps env \
         llm-up llm-down llm-logs llm-ps gpu-status \
         usage usage-decide usage-test employee \
-        coder-preflight coder-test
+        coder-preflight coder-test \
+        audit audit-gaps audit-test
 
 up:
 	docker compose up -d
@@ -79,3 +80,17 @@ coder-preflight:
 
 coder-test:
 	@cd services/coder && python3 test_dispatch.py
+
+# Repo health audit — the deterministic half of the discovery loop. Appends a
+# snapshot to .dolios/metrics/dolios/history.jsonl. See services/auditor/ and
+# docs/metrics.md.
+audit:
+	@python3 services/auditor/audit.py --repo . --name dolios \
+	  --history .dolios/metrics/dolios/history.jsonl
+
+# Just the ranked gaps (no full snapshot). Useful for spot-checks.
+audit-gaps:
+	@python3 services/auditor/audit.py --repo . --name dolios --gaps
+
+audit-test:
+	@cd services/auditor && python3 test_audit.py
