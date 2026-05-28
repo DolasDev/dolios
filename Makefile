@@ -15,7 +15,8 @@ SWITCH := ./infra/gpu-stack.sh
         llm-up llm-down llm-logs llm-ps gpu-status \
         usage usage-decide usage-test employee \
         coder-preflight coder-test \
-        audit audit-gaps audit-test
+        audit audit-gaps audit-test \
+        backlog-next backlog-test
 
 up:
 	docker compose up -d
@@ -94,3 +95,11 @@ audit-gaps:
 
 audit-test:
 	@cd services/auditor && python3 test_audit.py
+
+# Deterministic priority picker — what the supervisor cron runs each tick.
+# Emits JSON: kind ∈ {audit, propose, empty, error}. See services/coder/backlog.py.
+backlog-next:
+	@python3 services/coder/backlog.py --next
+
+backlog-test:
+	@cd services/coder && python3 test_backlog.py

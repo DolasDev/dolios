@@ -52,10 +52,26 @@ terminal:
 #   coder_loop:
 #     schedule: "0,30 3-11 * * *"
 #     prompt: >
-#       Run `python3 services/coder/dispatch.py --preflight-only`. If decision
-#       is 'hold', report the reason and exit. Otherwise pick ONE small backlog
-#       task from an allowlisted repo and run
-#       `python3 services/coder/dispatch.py --repo <name> --task <id>
-#       --instructions "<what to do>"`. Prefer smaller tasks when
-#       binding_headroom_pct is small. Report the resulting PR url or the
-#       refusal reason; one task per tick.
+#       Step 1 — capacity check:
+#         `python3 services/coder/dispatch.py --preflight-only`
+#         If decision is 'hold', report the reason + binding_window and exit.
+#
+#       Step 2 — pick:
+#         `python3 services/coder/backlog.py --next
+#          --config services/coder/coder.yaml`
+#         Parse the JSON. Switch on `kind`:
+#         - "audit":   run the `command` field verbatim. Report the new gap
+#                      count from the appended audit row.
+#         - "propose": dispatch claude headless to write a proposal — load the
+#                      latest row of `.dolios/metrics/<repo>/history.jsonl`,
+#                      find the gap whose `gap_id` matches the picker output,
+#                      follow `proposals/_template.md` exactly, use WebSearch
+#                      for current best-practice tooling, write the file at
+#                      `proposals/<repo>/<YYYY-MM-DD>-<slug>.md`. Do NOT commit.
+#                      Report the file path.
+#         - "empty":   report the `rationale` and exit.
+#         - "error":   report the `error` and exit.
+#
+#       One backlog item per tick — do not loop. The schedule fires again in
+#       30 minutes; persistent catch-up across 5h-window refills is the
+#       schedule's job, not yours.
