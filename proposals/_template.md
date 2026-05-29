@@ -54,15 +54,20 @@ section says "to be established as part of this proposal."
 
 ## Intervention
 
-Concrete change, **decomposed into execution-PR-sized chunks**. Each chunk is
-small enough that one dispatcher run can land it; chunks land in order.
+Concrete change, **decomposed into execution-PR-sized chunks** as a
+checkbox list. Each chunk is small enough that one dispatcher run can land it;
+chunks land in order. Each execution PR flips its chunk's `[ ]` → `[x]` as
+part of the same commit, so the human reviewer sees the implementation AND
+the chunk-done state change in one diff — and the picker can read the boxes
+to know what's next.
 
-1. **<chunk title>** — what changes, which files, which tool.
-2. **<chunk title>** — …
-3. (keep these small; if you have more than ~5, the proposal is too big — split it.)
+- [ ] **<chunk 1 title>** — what changes, which files, which tool. Detail.
+- [ ] **<chunk 2 title>** — …
+- [ ] **<chunk 3 title>** — …
 
+Keep chunks small; more than ~5 means the proposal is too big — split it.
 Each chunk maps to one execution PR opened by the dispatcher with branch
-`auto/coder/<proposal-slug>-<chunk>-<ts>` and body cross-linking back here.
+`auto/coder/<proposal-id>-chunk-<n>` and body cross-linking back here.
 
 ## Measurement plan
 

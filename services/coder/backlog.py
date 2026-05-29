@@ -6,19 +6,31 @@ emits the next dispatch task as JSON. The supervisor's cron prompt switches on
 `kind` and acts mechanically — keeping the picking logic in code rather than
 in the 35B's prompt is what makes the loop reliable.
 
-V0 priority order (highest first):
-  1. **audit**   — repo has no audit yet, or last audit > 7d old.
-  2. **propose** — repo has an uncovered open gap (`gap_id` not referenced by
-     any active proposal) AND fewer than 3 proposals in `implementing` state.
-     Pick the highest-severity uncovered gap across all repos; ties broken by
-     repo name → gap area for determinism.
-  3. **empty**   — nothing to do this tick.
+V1 priority order (highest first — finish what you started before opening new fronts):
+  1. **audit**     — repo has no audit yet, or last audit > 7d old.
+  2. **remeasure** — approved proposal where every Intervention chunk is checked
+     off but no Outcome / `done:` date has been appended yet. Re-audit, write
+     Outcome, flip status to done. Highest priority because closing a proposal
+     unblocks the implementing-cap slot.
+  3. **execute**   — approved proposal with at least one unchecked Intervention
+     chunk. Picks the FIFO-oldest such proposal (by frontmatter `opened:`).
+     Continuing a chunk on an already-implementing proposal is always allowed;
+     starting a brand-new approved one is gated on `effective_implementing
+     < 3` per repo (the proposals/README.md cap).
+  4. **propose**   — repo has an uncovered open gap (`gap_id` not referenced by
+     any active proposal). Highest-severity uncovered gap across all repos
+     wins; ties broken by repo name → gap area for determinism.
+  5. **empty**     — nothing to do this tick.
 
-Deferred to V1:
-  - **execute**   — next chunk of an approved proposal. Needs chunk-completion
-    state tracking (sidecar JSONL or open-PR scan).
-  - **remeasure** — re-audit after last execution PR merges, append Outcome.
-    Same dependency.
+Chunk state lives in the proposal markdown itself (`- [ ]` / `- [x]` checkboxes
+in the `## Intervention` section, parsed by chunks.py). The dispatcher flips
+boxes as part of each execution PR's commit, so human review sees the
+implementation + box flip in one diff. No sidecar required for V1.
+
+"Effective implementing" — a proposal counts toward the 3-active cap if its
+file status is `implementing` (legacy / explicit) OR (status is `approved` AND
+at least one chunk is `[x]` but not all). Strict `approved`-with-no-progress
+doesn't count; starting work on it is what tips it into implementing.
 
 Usage:
     python3 backlog.py --next                       # JSON to stdout
@@ -38,6 +50,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+import chunks as ch
 
 HERE = Path(__file__).resolve().parent
 DOLIOS_ROOT = HERE.parent.parent  # services/coder/ → dolios/
@@ -120,7 +134,8 @@ def _load_latest_audit_row(repo_name: str, dolios_root: Path) -> dict | None:
 
 def _load_proposals_for_repo(repo_name: str, dolios_root: Path) -> list[dict]:
     """All proposals under `proposals/<repo>/`. Returns the frontmatter dicts,
-    each annotated with `_path` (relative to dolios_root) for debugging.
+    each annotated with `_path` (relative to dolios_root) and `_abs_path`
+    (absolute, used to load chunk state via chunks.proposal_chunks).
     `_template.md` and any leading-underscore files are skipped."""
     pdir = dolios_root / "proposals" / repo_name
     if not pdir.is_dir():
@@ -132,8 +147,34 @@ def _load_proposals_for_repo(repo_name: str, dolios_root: Path) -> list[dict]:
         fm = _parse_frontmatter(p)
         if fm:
             fm["_path"] = str(p.relative_to(dolios_root))
+            fm["_abs_path"] = str(p)
             out.append(fm)
     return out
+
+
+def _proposal_chunks(fm: dict) -> list[ch.Chunk]:
+    """Convenience: load chunks from a proposal frontmatter dict."""
+    abs_path = fm.get("_abs_path")
+    if not abs_path:
+        return []
+    return ch.proposal_chunks(Path(abs_path))
+
+
+def effective_implementing(fm: dict, chunks: list[ch.Chunk]) -> bool:
+    """Does this proposal count toward the per-repo 3-active cap?
+
+    Legacy: file `status: implementing` always counts. New convention: status
+    `approved` + at least one `[x]` chunk but not all → effectively implementing.
+    Approved-with-no-progress does NOT count yet; the first execute tips it in.
+    """
+    file_status = fm.get("status")
+    if file_status == "implementing":
+        return True
+    if file_status == "approved" and chunks:
+        any_done = any(c.done for c in chunks)
+        if any_done and not ch.all_chunks_done(chunks):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +210,8 @@ def build_repo_backlog(
         if status in ACTIVE_PROPOSAL_STATUSES:
             for gid in fm.get("gap_ids", []) or []:
                 covered.add(gid)
-        if status == "implementing":
+        # Effective implementing — file status OR computed-from-chunks.
+        if effective_implementing(fm, _proposal_chunks(fm)):
             implementing += 1
 
     return RepoBacklog(
@@ -193,27 +235,108 @@ def _audit_task(b: RepoBacklog) -> dict:
         "repo_path": str(b.path),
         "rationale": ("first audit for repo" if b.last_audit_ts is None
                       else f"audit > {STALE_AUDIT_DAYS}d old (last {datetime.fromtimestamp(b.last_audit_ts, tz=timezone.utc).isoformat()}Z)"),
-        # Convenience so the supervisor's prompt is a literal shell command.
         "command": (
             f"python3 services/auditor/audit.py --repo {b.path} "
             f"--name {b.name} "
-            f".dolios/metrics/{b.name}/history.jsonl".replace(
-                ".dolios/metrics", "--history .dolios/metrics")
+            f"--history .dolios/metrics/{b.name}/history.jsonl"
         ),
     }
 
 
-def pick(backlogs: list[RepoBacklog]) -> dict:
-    """V0 priority logic. Returns a dict suitable for `json.dumps`."""
+def _remeasure_task(b: RepoBacklog, fm: dict, chunks: list[ch.Chunk]) -> dict:
+    proposal_id = fm.get("id", "")
+    return {
+        "kind": "remeasure",
+        "repo": b.name,
+        "repo_path": str(b.path),
+        "proposal_id": proposal_id,
+        "proposal_path": fm.get("_path"),
+        "rationale": (f"approved proposal '{proposal_id}' has all "
+                      f"{len(chunks)} chunks checked; ready to re-audit and "
+                      f"append Outcome"),
+        # The supervisor first runs this audit, then dispatches claude to read
+        # the new audit row + the original baseline row, populate the proposal's
+        # Outcome section, and flip status: approved → done with today's date.
+        "command_audit": (
+            f"python3 services/auditor/audit.py --repo {b.path} "
+            f"--name {b.name} "
+            f"--history .dolios/metrics/{b.name}/history.jsonl"
+        ),
+    }
 
-    # 1. Audit-due. Deterministic order by repo name so multiple stale repos
-    # don't shuffle between ticks.
+
+def _execute_task(b: RepoBacklog, fm: dict, chunk: ch.Chunk,
+                  *, is_first_chunk: bool) -> dict:
+    proposal_id = fm.get("id", "")
+    # task_id stays inside the dispatcher's branch-name char set (safe slug);
+    # proposal_id already uses `/` so we replace it with `-`.
+    task_id = f"{proposal_id.replace('/', '-')}-chunk-{chunk.index}"
+    instructions = f"{chunk.title}\n\n{chunk.description}".strip()
+    return {
+        "kind": "execute",
+        "repo": b.name,
+        "repo_path": str(b.path),
+        "proposal_id": proposal_id,
+        "proposal_path": fm.get("_path"),
+        "chunk_index": chunk.index,
+        "chunk_title": chunk.title,
+        "task_id": task_id,
+        # Pass-through fields the supervisor / dispatcher consume directly.
+        # Multi-line instructions: the supervisor reads from this field, not
+        # the shell-pasted command.
+        "instructions": instructions,
+        "rationale": (f"approved proposal '{proposal_id}' chunk "
+                      f"{chunk.index}/{len(_proposal_chunks(fm))} "
+                      f"({'starting' if is_first_chunk else 'continuing'})"),
+    }
+
+
+def pick(backlogs: list[RepoBacklog]) -> dict:
+    """V1 priority logic. Returns a dict suitable for `json.dumps`."""
+
+    # 1. Audit-due. Deterministic order by repo name.
     for b in sorted(backlogs, key=lambda x: x.name):
         if b.audit_stale:
             return _audit_task(b)
 
-    # 2. Propose for the highest-severity uncovered gap with room under the cap.
-    candidates: list[tuple] = []  # (sev_rank, repo_name, gap_area, gap_id, gap)
+    # Gather approved proposals once (with their parsed chunks) — needed for
+    # both remeasure and execute. Sort FIFO by `opened:` so the oldest in-flight
+    # work is finished first.
+    approved: list[tuple[RepoBacklog, dict, list[ch.Chunk]]] = []
+    for b in sorted(backlogs, key=lambda x: x.name):
+        for fm in b.proposals:
+            if fm.get("status") != "approved":
+                continue
+            if fm.get("done"):
+                continue  # done date set → already closed
+            approved.append((b, fm, _proposal_chunks(fm)))
+    approved.sort(key=lambda t: (t[1].get("opened") or "9999-12-31",
+                                 t[1].get("id") or ""))
+
+    # 2. Remeasure — approved proposal with all chunks done. Closing one frees
+    # an implementing-cap slot, so this comes before execute and propose.
+    for b, fm, chunks in approved:
+        if ch.all_chunks_done(chunks):
+            return _remeasure_task(b, fm, chunks)
+
+    # 3. Execute — next unchecked chunk in the oldest-opened approved proposal,
+    # respecting the per-repo cap. A proposal that's already in progress
+    # (`effective_implementing` True) can continue regardless of cap; a fresh
+    # approved-with-no-progress proposal can only START if the repo is under cap.
+    for b, fm, chunks in approved:
+        pending = ch.next_pending_chunk(chunks)
+        if pending is None:
+            continue
+        already_implementing = effective_implementing(fm, chunks)
+        if already_implementing:
+            return _execute_task(b, fm, pending, is_first_chunk=False)
+        # Starting fresh → cap check.
+        if b.implementing_count < MAX_IMPLEMENTING_PER_REPO:
+            return _execute_task(b, fm, pending, is_first_chunk=True)
+        # Else: this proposal can't start this tick; try the next one.
+
+    # 4. Propose — highest-severity uncovered gap with room under the cap.
+    candidates: list[tuple] = []
     for b in sorted(backlogs, key=lambda x: x.name):
         if b.implementing_count >= MAX_IMPLEMENTING_PER_REPO:
             continue
@@ -242,15 +365,14 @@ def pick(backlogs: list[RepoBacklog]) -> dict:
             "frameworks": gap.get("frameworks", []),
             "rationale": (f"open {sev}-severity gap '{gid}' has no active "
                           f"covering proposal; under the 3-active cap"),
-            # No command — the supervisor's prompt constructs the claude
-            # dispatch from the structured context above (gap_id, summary,
-            # frameworks, the latest audit row).
         }
 
-    # 3. Quiet tick.
+    # 5. Quiet tick.
     return {
         "kind": "empty",
-        "rationale": "no stale audits; every open gap is covered by an active proposal (or every repo is at the 3-implementing cap)",
+        "rationale": ("no stale audits; no approved proposals with pending "
+                      "chunks; every open gap is covered or every repo is at "
+                      "the 3-implementing cap"),
     }
 
 

@@ -125,13 +125,44 @@ on `main` once approved.
 
 ## How proposals get executed
 
-Once a proposal is `approved` (merged), each chunk in its **Intervention**
-section becomes one or more dispatcher tasks. The dispatcher
-([`services/coder/`](../services/coder/)) opens an execution PR per chunk,
-tagged with the proposal id in the PR body and branch name
-(`auto/coder/<proposal-slug>-<chunk>-<ts>`). Merging an execution PR keeps the
-proposal in `implementing`; the **last** execution PR merging triggers the
-re-measure step and the `done` flip.
+Chunks live in the **Intervention** section as a checkbox list:
+
+```markdown
+- [ ] **Chunk 1 — minimal CI workflow**
+- [ ] **Chunk 2 — pyproject.toml for ruff**
+- [ ] **Chunk 3 — auditor extension for the GH Actions API**
+```
+
+Once a proposal is `approved` (merged onto `main`), the picker
+([`services/coder/backlog.py`](../services/coder/backlog.py)) reads the
+checkboxes to find the next unchecked chunk and emits `kind: execute`. The
+dispatcher then:
+
+1. Opens an execution PR on branch `auto/coder/<proposal-id>-chunk-<n>`,
+   with the PR body cross-linking back to the proposal.
+2. **As part of the same commit**, flips that chunk's `[ ]` → `[x]` in the
+   proposal markdown — so a human reviewer sees the implementation AND the
+   chunk-done state change in one diff, and merging the PR atomically updates
+   both.
+
+This makes the proposal markdown the single canonical source of chunk state.
+No sidecar required; the diff is self-describing.
+
+While an execution PR is open, `main` still shows the chunk's box as `[ ]`,
+so the picker would re-emit `execute` for the same chunk on the next tick.
+The dispatcher prevents duplicates by checking for an existing
+`auto/coder/<proposal-id>-chunk-<n>` branch before opening a new PR.
+
+The proposal's **effective status** is computed from the chunk state:
+
+| File `status:` | Chunks | Effective state |
+|---|---|---|
+| `proposed` | any | proposed (awaiting human merge) |
+| `approved` | none `[x]` | approved (ready to start) |
+| `approved` | some `[x]`, some `[ ]` | implementing (counts toward 3-cap) |
+| `approved` | all `[x]`, no `done:` date | ready to remeasure |
+| `approved` | all `[x]`, `done:` date set | done |
+| `done` / `abandoned` | any | terminal |
 
 ## How proposals get re-measured
 

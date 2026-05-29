@@ -99,9 +99,11 @@ written into the Intervention below.
 ## Intervention
 
 Three execution-PR-sized chunks, landing in order. Each chunk is small enough
-that one dispatcher run can produce it.
+that one dispatcher run can produce it. Each execution PR flips its checkbox
+below as part of the same commit, so a human reviewer sees the implementation
+*and* the chunk-done state change in one diff.
 
-1. **`.github/workflows/ci.yml` — the minimal first workflow.**
+- [ ] **`.github/workflows/ci.yml` — the minimal first workflow.**
    - Path: `.github/workflows/ci.yml`.
    - Triggers: `pull_request` against `main`; `push` to `main`.
    - Concurrency group: `ci-${{ github.ref }}` with `cancel-in-progress: true`
@@ -122,7 +124,7 @@ that one dispatcher run can produce it.
      privilege, OpenSSF *Token-Permissions* satisfied by construction.
    - File-only PR; no code changes outside `.github/`.
 
-2. **Minimal `pyproject.toml` for ruff config + tighten the `services/`
+- [ ] **Minimal `pyproject.toml` for ruff config + tighten the `services/`
    lint.**
    - Path: `pyproject.toml` (new file at repo root).
    - Only the `[tool.ruff]` section: `line-length = 100`,
@@ -141,7 +143,7 @@ that one dispatcher run can produce it.
      `OpenSSF Scorecard: Pinned-Dependencies` doorway for later
      `[project.dependencies]` work.
 
-3. **`services/auditor/ci_api.py` — flip the `ci.*` `not_measured` fields to
+- [ ] **`services/auditor/ci_api.py` — flip the `ci.*` `not_measured` fields to
    measured.**
    - New module: `services/auditor/ci_api.py`. Function:
      `gh_ci_metrics(owner: str, repo: str, *, token: str | None,

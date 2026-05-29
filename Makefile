@@ -16,7 +16,7 @@ SWITCH := ./infra/gpu-stack.sh
         usage usage-decide usage-test employee \
         coder-preflight coder-test \
         audit audit-gaps audit-test \
-        backlog-next backlog-test
+        backlog-next backlog-test chunks-test
 
 up:
 	docker compose up -d
@@ -103,3 +103,6 @@ backlog-next:
 
 backlog-test:
 	@cd services/coder && python3 test_backlog.py
+
+chunks-test:
+	@cd services/coder && python3 test_chunks.py

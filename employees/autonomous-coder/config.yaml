@@ -60,17 +60,30 @@ terminal:
 #         `python3 services/coder/backlog.py --next
 #          --config services/coder/coder.yaml`
 #         Parse the JSON. Switch on `kind`:
-#         - "audit":   run the `command` field verbatim. Report the new gap
-#                      count from the appended audit row.
-#         - "propose": dispatch claude headless to write a proposal — load the
-#                      latest row of `.dolios/metrics/<repo>/history.jsonl`,
-#                      find the gap whose `gap_id` matches the picker output,
-#                      follow `proposals/_template.md` exactly, use WebSearch
-#                      for current best-practice tooling, write the file at
-#                      `proposals/<repo>/<YYYY-MM-DD>-<slug>.md`. Do NOT commit.
-#                      Report the file path.
-#         - "empty":   report the `rationale` and exit.
-#         - "error":   report the `error` and exit.
+#         - "audit":     run the `command` field verbatim. Report the new gap
+#                        count from the appended audit row.
+#         - "remeasure": (a) run the `command_audit` field — appends a fresh
+#                        audit row. (b) Dispatch claude headless to compare
+#                        the new row to the original baseline cited in the
+#                        proposal's frontmatter, populate the Outcome table
+#                        per the template, set `done: <today>` in frontmatter,
+#                        flip `status: approved` → `status: done`, open a PR.
+#                        Report PR url.
+#         - "execute":   `python3 services/coder/dispatch.py --repo <repo>
+#                        --task <task_id> --instructions "<instructions>"`
+#                        (the `instructions` field is multi-line; pass via
+#                        a heredoc or temp file). Dispatcher opens the PR
+#                        with the chunk's checkbox flipped. Report PR url.
+#         - "propose":   dispatch claude headless to write a proposal — load
+#                        the latest row of `.dolios/metrics/<repo>/history.jsonl`,
+#                        find the gap whose `gap_id` matches the picker output,
+#                        follow `proposals/_template.md` exactly (checkbox
+#                        Intervention list), use WebSearch for current
+#                        best-practice tooling, write the file at
+#                        `proposals/<repo>/<YYYY-MM-DD>-<slug>.md`. Do NOT
+#                        commit. Report the file path.
+#         - "empty":     report the `rationale` and exit.
+#         - "error":     report the `error` and exit.
 #
 #       One backlog item per tick — do not loop. The schedule fires again in
 #       30 minutes; persistent catch-up across 5h-window refills is the
