@@ -131,9 +131,19 @@ def _real_claude(instructions: str, cwd: str) -> dict:
 
 
 def _real_gh(args: list, cwd: str) -> str:
-    return subprocess.run(
-        ["gh", *args], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
+    """gh CLI runner. Converts FileNotFoundError (gh not installed) into a
+    GuardrailError so callers see a clean message instead of a Python
+    traceback. The dispatcher's try/finally then still appends the ledger row
+    and resets HEAD on the way out."""
+    try:
+        return subprocess.run(
+            ["gh", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ).stdout.strip()
+    except FileNotFoundError:
+        raise GuardrailError(
+            "gh CLI not on PATH — install it (https://cli.github.com) and "
+            "set GH_TOKEN before retrying."
+        )
 
 
 def _real_gate_decide(max_utilization: float, windows: dict | None) -> dict:
@@ -278,67 +288,82 @@ class Dispatcher:
                 f"refusing to run: HEAD is '{head}', expected work branch '{branch}'"
             )
 
-        # Hand the actual engineering to Claude Code, inside the work branch.
-        result = self.r.claude(instructions, repo_path)
-        cost = float(result.get("total_cost_usd", 0.0))
-        over_run_budget = cost > self.cfg.budget.max_cost_usd_per_run
-
-        # Chunk mode: flip the proposal's checkbox so the same commit carries
-        # both the work AND the chunk-done state change. Done AFTER claude (so
-        # we know the chunk actually ran) but BEFORE `git add -A` (so the flip
-        # gets bundled into the auto-coder commit).
-        #
-        # GUARDRAIL: refuse to flip if claude made no changes — would otherwise
-        # land a commit that marks the chunk "done" without any implementation.
-        # The flip itself counts as a tree change, so we can't check "anything
-        # in `git status` after the flip" — we have to check BEFORE.
+        # --- begin work block -------------------------------------------- #
+        # Everything below is in try/finally so that:
+        #   (1) the ledger row is appended even if the work raises mid-flight
+        #       (cost from claude must be recorded even when push or gh fails);
+        #   (2) HEAD is best-effort returned to `base` so the next tick's
+        #       working-tree-clean precondition is met without manual cleanup.
+        result: dict | None = None
+        cost = 0.0
+        over_run_budget = False
         chunk_flipped = False
-        if chunk_mode:
-            if not git("status", "--porcelain").strip():
-                raise GuardrailError(
-                    "claude made no changes in chunk mode — refusing to flip "
-                    f"the chunk-{chunk_index} checkbox (claude is_error="
-                    f"{result.get('is_error')}, cost_usd={cost}). Did claude "
-                    "lack write permissions, or refuse the work?"
-                )
-            self._flip_proposal_chunk(repo_path, proposal_path, chunk_index)
-            chunk_flipped = True
-
-        # Commit whatever Claude Code changed (on the work branch only).
-        git("add", "-A")
-        committed = bool(git("status", "--porcelain").strip())
-        if committed:
-            commit_msg = f"auto-coder: {task_id}"
-            if chunk_mode:
-                commit_msg += f"\n\nChunk {chunk_index} of {proposal_path}; box flipped in this commit."
-            git("commit", "-m", commit_msg)
-
+        committed = False
         pr_url = ""
-        if committed:
-            git("push", "-u", "origin", branch)
-            pr_url = self.r.gh(
-                ["pr", "create", "--base", base, "--head", branch,
-                 "--title", f"auto-coder: {task_id}",
-                 "--body", (instructions[:1000] or task_id)],
-                repo_path,
-            )
+        try:
+            # Hand the actual engineering to Claude Code, inside the work branch.
+            result = self.r.claude(instructions, repo_path)
+            cost = float(result.get("total_cost_usd", 0.0))
+            over_run_budget = cost > self.cfg.budget.max_cost_usd_per_run
 
-        record = {
-            "ts": self.r.now(),
-            "iso": datetime.datetime.fromtimestamp(self.r.now()).isoformat(),
-            "repo": repo_name,
-            "task_id": task_id,
-            "branch": branch,
-            "cost_usd": cost,
-            "over_run_budget": over_run_budget,
-            "committed": committed,
-            "pr_url": pr_url,
-            "is_error": bool(result.get("is_error")),
-            "proposal_path": proposal_path,
-            "chunk_index": chunk_index,
-            "chunk_flipped": chunk_flipped,
-        }
-        self._append_ledger(record)
+            # Chunk mode: flip the proposal's checkbox so the same commit
+            # carries both the work AND the chunk-done state change.
+            # GUARDRAIL: refuse to flip if claude made no changes — would
+            # otherwise land a commit that marks the chunk "done" without any
+            # implementation. The flip itself counts as a tree change, so we
+            # have to check BEFORE.
+            if chunk_mode:
+                if not git("status", "--porcelain").strip():
+                    raise GuardrailError(
+                        "claude made no changes in chunk mode — refusing to "
+                        f"flip the chunk-{chunk_index} checkbox (claude "
+                        f"is_error={result.get('is_error')}, cost_usd={cost}). "
+                        "Did claude lack write permissions, or refuse the work?"
+                    )
+                self._flip_proposal_chunk(repo_path, proposal_path, chunk_index)
+                chunk_flipped = True
+
+            # Commit whatever Claude Code changed (on the work branch only).
+            git("add", "-A")
+            committed = bool(git("status", "--porcelain").strip())
+            if committed:
+                commit_msg = f"auto-coder: {task_id}"
+                if chunk_mode:
+                    commit_msg += (f"\n\nChunk {chunk_index} of {proposal_path}; "
+                                   "box flipped in this commit.")
+                git("commit", "-m", commit_msg)
+                git("push", "-u", "origin", branch)
+                pr_url = self.r.gh(
+                    ["pr", "create", "--base", base, "--head", branch,
+                     "--title", f"auto-coder: {task_id}",
+                     "--body", (instructions[:1000] or task_id)],
+                    repo_path,
+                )
+        finally:
+            record = {
+                "ts": self.r.now(),
+                "iso": datetime.datetime.fromtimestamp(self.r.now()).isoformat(),
+                "repo": repo_name,
+                "task_id": task_id,
+                "branch": branch,
+                "cost_usd": cost,
+                "over_run_budget": over_run_budget,
+                "committed": committed,
+                "pr_url": pr_url,
+                "is_error": bool(result.get("is_error")) if result else None,
+                "proposal_path": proposal_path,
+                "chunk_index": chunk_index,
+                "chunk_flipped": chunk_flipped,
+            }
+            self._append_ledger(record)
+            # Best-effort HEAD reset. Skip the checkout when the tree isn't
+            # clean (would fail noisily) — uncommitted state is rare, and the
+            # operator can review/discard it manually.
+            try:
+                if not self.r.git(["status", "--porcelain"], repo_path).strip():
+                    self.r.git(["checkout", base], repo_path)
+            except Exception:
+                pass  # don't double-fault during cleanup
         return record
 
     # -- chunk-mode helpers ----------------------------------------------- #

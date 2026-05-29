@@ -36,10 +36,17 @@ class FakeRepo:
         if args[:2] == ["status", "--porcelain"]:
             if not self.claude_ran:
                 return "M file\n" if self.initial_dirty else ""
+            # After commit, working tree is clean (no further dirty status).
+            if self.committed:
+                return ""
             return " M changed.py\n" if self.claude_changes else ""
-        if args and args[0] == "checkout" and "-b" in args:
-            if self.checkout_works:
-                self.branch = args[2]
+        if args and args[0] == "checkout":
+            if "-b" in args:
+                if self.checkout_works:
+                    self.branch = args[2]
+            elif len(args) >= 2:
+                # `git checkout <branch>` — used by the cleanup HEAD reset.
+                self.branch = args[1]
             return ""
         if args[:1] == ["rev-parse"]:
             return self.branch + "\n"
@@ -144,8 +151,10 @@ def test_happy_path_branches_runs_and_opens_pr():
         repo = FakeRepo(cost=0.5)
         _, _, disp = make(tmp, repo)
         rec = disp.dispatch("dolios", "TASK-1", "fix the thing")
-        # branched off base and moved HEAD onto the work branch
-        assert repo.branch == rec["branch"] and rec["branch"].startswith("auto/coder/TASK-1")
+        # rec captures the work branch name
+        assert rec["branch"].startswith("auto/coder/TASK-1")
+        # finally-block cleanup returned HEAD to base for the next tick
+        assert repo.branch == "main"
         assert repo.claude_ran and repo.committed and repo.pushed
         # opened a PR, never merged
         assert any(c[:2] == ["pr", "create"] for c in repo.gh_calls)
@@ -208,16 +217,22 @@ class FakeRepoWithProposal(FakeRepo):
     """FakeRepo + a real on-disk proposal at proposals/dolios/p1.md so
     flip_chunk has something to edit."""
 
-    def __init__(self, repo_path, *, gh_pr_list_response="[]", **kw):
+    def __init__(self, repo_path, *, gh_pr_list_response="[]",
+                 gh_raises_on_create=False, **kw):
         super().__init__(**kw)
         self.repo_path = repo_path
         self.gh_pr_list_response = gh_pr_list_response
+        self.gh_raises_on_create = gh_raises_on_create
 
     def gh(self, args, cwd):
         self.gh_calls.append(args)
         # Idempotency check uses `pr list --head <branch> ...`
         if args[:2] == ["pr", "list"]:
             return self.gh_pr_list_response
+        if args[:2] == ["pr", "create"] and self.gh_raises_on_create:
+            # Models the real-world failure modes: gh missing (FileNotFoundError
+            # converted to GuardrailError by _real_gh), gh-auth bad, network out.
+            raise d.GuardrailError("simulated gh pr create failure")
         return "https://github.com/dolas/dolios/pull/1"
 
 
@@ -354,6 +369,58 @@ def test_chunk_mode_flip_failure_aborts_after_claude():
         # the loud failure prevents the implementation commit from landing
         # without the state-change diff.
         assert repo.claude_ran
+
+
+# --------------------------------------------------------------------------- #
+# Partial-failure resilience: ledger persistence + HEAD cleanup
+# --------------------------------------------------------------------------- #
+def test_ledger_row_written_even_when_gh_pr_create_fails():
+    """If gh raises post-push, the ledger still gets the row — cost is real
+    and must be recorded for window accounting regardless of PR outcome."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, _ = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(repo_path, gh_raises_on_create=True)
+        ledger = os.path.join(tmp, "l.jsonl")
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=ledger))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        _expect_guardrail(lambda: disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "x",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        ))
+        with open(ledger) as fh:
+            rows = [json.loads(line) for line in fh if line.strip()]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["committed"] is True
+        assert row["chunk_flipped"] is True
+        assert row["pr_url"] == ""        # gh failed → no URL
+        assert row["cost_usd"] == 0.5     # claude's reported cost still recorded
+
+
+def test_head_returned_to_base_after_chunk_mode_gh_failure():
+    """The finally block's cleanup checkout returns HEAD to base on failure
+    so the next tick's working-tree-clean precondition is met."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, _ = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(repo_path, gh_raises_on_create=True)
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=os.path.join(tmp, "l.jsonl")))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        _expect_guardrail(lambda: disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "x",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        ))
+        # Tracked through git("checkout", base) in the cleanup
+        assert repo.branch == "main"
 
 
 # --------------------------------------------------------------------------- #
