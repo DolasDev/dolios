@@ -29,7 +29,34 @@ make backlog-test        # picker tests (no model, no network)
 
 python3 services/coder/dispatch.py \
   --repo dolios --task TASK-1 --instructions "Add a docstring to foo()"
+make chunks-test         # checkbox parser + flip_chunk tests
 ```
+
+## Two dispatch modes
+
+**Free-form** (what the example above shows): branch name carries a timestamp
+suffix so re-runs don't collide; no proposal mark-up touched.
+
+**Chunk mode** (V1, the autonomous-coder's default once the cron is on):
+
+```sh
+python3 services/coder/dispatch.py \
+  --repo dolios \
+  --task dolios-2026-05-28-adopt-github-actions-ci-chunk-1 \
+  --instructions "..." \
+  --proposal-path proposals/dolios/2026-05-28-adopt-github-actions-ci.md \
+  --chunk-index 1
+```
+
+In chunk mode:
+- Branch name is **deterministic** (`auto/coder/<task_id>`, no timestamp), so
+  a re-attempt while the PR is in flight collides loudly on `git checkout -b`.
+- A `gh pr list --head <branch> --state all` precheck refuses if any OPEN or
+  MERGED PR already exists for the branch — primary idempotency guard.
+- **Before commit**, the proposal markdown's chunk `[ ]` is flipped to `[x]`
+  via `chunks.flip_chunk`. The execution PR diff carries the implementation
+  AND the chunk-done state change together, so a human reviewer sees both at
+  once and merging the PR atomically advances proposal state on `main`.
 
 ## How it fits
 
@@ -64,12 +91,17 @@ fakes — no real git/claude/gh/network. See `test_dispatch.py` (9 tests).
 - ✅ Dispatcher + guardrails + tests (`dispatch.py`).
 - ✅ Per-window pacing in the gate (`usage-gate/`).
 - ✅ Deterministic auditor + proposal scaffolding (`auditor/` + `proposals/`).
-- ✅ Deterministic picker for the audit→propose half (`backlog.py`).
-- ⏳ **Execute / remeasure paths in the picker** — need chunk-completion
-  tracking (sidecar JSONL or open-PR scan via `gh`). Once landed, the loop
-  closes end-to-end.
+- ✅ Deterministic picker — all five kinds (`backlog.py`):
+  audit / remeasure / execute / propose / empty.
+- ✅ Chunk-mode dispatch (`dispatch.py` + `chunks.py`): atomic box-flip,
+  deterministic branch, gh-based idempotency precheck.
 - ⏳ **Token refresh** in usage-gate — until done, an expired token makes the
   gate *hold* (fail closed), so the loop pauses rather than acting on a dead token.
+- ⏳ **Remeasure execution** — picker emits `kind: remeasure` with a
+  `command_audit` field, but the supervisor's prompt still composes the
+  Outcome-PR claude dispatch by hand. A dedicated `remeasure.py` helper that
+  takes a proposal id and produces the Outcome PR end-to-end would close
+  this loop completely.
 - ⏳ **Host run** — needs an allowlisted repo to actually live at the
   configured path; the `autonomous-coder` cron stays disabled (and
   `approvals: manual`) until validated.

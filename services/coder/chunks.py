@@ -67,6 +67,42 @@ def all_chunks_done(chunks: list[Chunk]) -> bool:
     return bool(chunks) and all(c.done for c in chunks)
 
 
+def flip_chunk(markdown_text: str, chunk_index: int) -> str:
+    """Return `markdown_text` with chunk `chunk_index`'s `[ ]` flipped to `[x]`.
+
+    This is what the dispatcher calls as part of each execution PR's commit —
+    so the box flip and the implementation are one diff. Raises ValueError if
+    the chunk is out of range, already checked, or if there's no Intervention
+    section. The proposal's source-order chunk list (per `parse_chunks`) is the
+    authority for what "Nth chunk" means.
+    """
+    h = re.search(r"^##\s+Intervention\s*$", markdown_text, re.MULTILINE)
+    if not h:
+        raise ValueError("no '## Intervention' section in proposal")
+    section_start = h.end()
+    next_h = re.search(r"^##\s+", markdown_text[section_start:], re.MULTILINE)
+    section_end = (section_start + next_h.start()) if next_h else len(markdown_text)
+
+    # Match within the section bounds only (so we can't accidentally flip a
+    # checkbox in an unrelated section).
+    matches = [m for m in CHECKBOX_RE.finditer(markdown_text)
+               if section_start <= m.start() < section_end]
+    if not matches:
+        raise ValueError("no checkbox chunks in Intervention section")
+    if not 1 <= chunk_index <= len(matches):
+        raise ValueError(
+            f"chunk_index {chunk_index} out of range (1..{len(matches)})"
+        )
+    target = matches[chunk_index - 1]
+    if target.group(1).lower() == "x":
+        raise ValueError(f"chunk {chunk_index} is already checked off")
+
+    # Replace the single space inside `[ ]` with `x`.
+    state_start = target.start(1)
+    state_end = target.end(1)
+    return markdown_text[:state_start] + "x" + markdown_text[state_end:]
+
+
 # --------------------------------------------------------------------------- #
 # Internals
 # --------------------------------------------------------------------------- #

@@ -138,6 +138,62 @@ def test_capital_X_also_counts_as_done():
 
 
 # --------------------------------------------------------------------------- #
+# flip_chunk — what the dispatcher calls when it lands a chunk's execution PR
+# --------------------------------------------------------------------------- #
+def test_flip_chunk_marks_a_pending_chunk_as_done():
+    out = c.flip_chunk(CHECKBOX_PROPOSAL, 1)
+    assert "- [x] **Chunk 1**" in out
+    assert "- [x] **Chunk 2**" in out   # was already done, untouched
+    assert "- [ ] **Chunk 3**" in out   # still pending
+
+
+def test_flip_chunk_idempotency_already_checked_raises():
+    """Flipping a chunk that's already `[x]` is a guardrail violation —
+    means the dispatcher is about to re-run merged work. Loud failure."""
+    try:
+        c.flip_chunk(CHECKBOX_PROPOSAL, 2)
+    except ValueError as exc:
+        assert "already checked" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_flip_chunk_out_of_range_raises():
+    try:
+        c.flip_chunk(CHECKBOX_PROPOSAL, 99)
+    except ValueError as exc:
+        assert "out of range" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_flip_chunk_no_intervention_raises():
+    try:
+        c.flip_chunk(NO_INTERVENTION, 1)
+    except ValueError as exc:
+        assert "Intervention" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_flip_chunk_doesnt_touch_checkboxes_in_other_sections():
+    """A `- [ ]` in some other section (e.g. a Risks bullet list quoted as a
+    todo) must not be misread as a chunk."""
+    md = """\
+## Intervention
+
+- [ ] **the only chunk**
+
+## Risks
+
+- [ ] unrelated checkbox that must NOT flip
+"""
+    out = c.flip_chunk(md, 1)
+    assert "- [x] **the only chunk**" in out
+    assert "- [ ] unrelated checkbox that must NOT flip" in out
+
+
+# --------------------------------------------------------------------------- #
 # Standalone runner
 # --------------------------------------------------------------------------- #
 def _run_standalone():

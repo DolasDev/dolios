@@ -212,7 +212,33 @@ class Dispatcher:
         return path
 
     # -- the dispatch ------------------------------------------------------ #
-    def dispatch(self, repo_name: str, task_id: str, instructions: str) -> dict:
+    def dispatch(
+        self,
+        repo_name: str,
+        task_id: str,
+        instructions: str,
+        *,
+        proposal_path: str | None = None,
+        chunk_index: int | None = None,
+    ) -> dict:
+        """Run one chunk of work.
+
+        Two modes:
+
+        - **Free-form** (`proposal_path=None`): the historical mode. Branch
+          name carries a timestamp suffix so re-runs don't collide; no
+          checkbox is flipped; no idempotency check against gh.
+
+        - **Chunk mode** (`proposal_path` + `chunk_index` both set): the V1
+          autonomous mode. Branch name is **deterministic** —
+          `<branch_prefix>/<task_id>` with no timestamp — so an attempt to
+          re-dispatch the same chunk while one is in-flight collides loudly.
+          Before claude runs, we also query `gh pr list --head <branch>` and
+          refuse if any open/merged PR already exists. **Before commit**, the
+          proposal markdown's chunk `[ ]` is flipped to `[x]` so the execution
+          PR diff carries both the implementation and the chunk-done state
+          change atomically.
+        """
         self.preflight()
         repo_path = self._resolve_repo(repo_name)
         git = self._git(repo_path)
@@ -223,8 +249,15 @@ class Dispatcher:
             raise GuardrailError("working tree is not clean; refusing to start")
 
         base = self.cfg.base_branch
-        ts = datetime.datetime.fromtimestamp(self.r.now()).strftime("%Y%m%d-%H%M%S")
-        branch = f"{self.cfg.branch_prefix}/{task_id}-{ts}"
+        chunk_mode = proposal_path is not None and chunk_index is not None
+        if chunk_mode:
+            # Deterministic name = idempotency on collision.
+            branch = f"{self.cfg.branch_prefix}/{task_id}"
+            self._check_chunk_idempotent(branch, repo_path)
+        else:
+            ts = datetime.datetime.fromtimestamp(self.r.now()).strftime("%Y%m%d-%H%M%S")
+            branch = f"{self.cfg.branch_prefix}/{task_id}-{ts}"
+
         # Branch OFF base; we never commit onto base itself.
         git("checkout", "-b", branch, base)
 
@@ -240,11 +273,23 @@ class Dispatcher:
         cost = float(result.get("total_cost_usd", 0.0))
         over_run_budget = cost > self.cfg.budget.max_cost_usd_per_run
 
+        # Chunk mode: flip the proposal's checkbox so the same commit carries
+        # both the work AND the chunk-done state change. Done AFTER claude (so
+        # we know the chunk actually ran) but BEFORE `git add -A` (so the flip
+        # gets bundled into the auto-coder commit).
+        chunk_flipped = False
+        if chunk_mode:
+            self._flip_proposal_chunk(repo_path, proposal_path, chunk_index)
+            chunk_flipped = True
+
         # Commit whatever Claude Code changed (on the work branch only).
         git("add", "-A")
         committed = bool(git("status", "--porcelain").strip())
         if committed:
-            git("commit", "-m", f"auto-coder: {task_id}")
+            commit_msg = f"auto-coder: {task_id}"
+            if chunk_mode:
+                commit_msg += f"\n\nChunk {chunk_index} of {proposal_path}; box flipped in this commit."
+            git("commit", "-m", commit_msg)
 
         pr_url = ""
         if committed:
@@ -267,9 +312,64 @@ class Dispatcher:
             "committed": committed,
             "pr_url": pr_url,
             "is_error": bool(result.get("is_error")),
+            "proposal_path": proposal_path,
+            "chunk_index": chunk_index,
+            "chunk_flipped": chunk_flipped,
         }
         self._append_ledger(record)
         return record
+
+    # -- chunk-mode helpers ----------------------------------------------- #
+    def _check_chunk_idempotent(self, branch: str, repo_path: str) -> None:
+        """Refuse if a PR already exists for this chunk's deterministic branch.
+
+        For V1 the canonical "is this chunk in flight or already merged?"
+        signal is `gh pr list --head <branch> --state all`. A gh failure is
+        non-fatal — the subsequent `git checkout -b <branch>` will fail on
+        local-branch collision regardless, which is the secondary guard.
+        """
+        try:
+            raw = self.r.gh(
+                ["pr", "list", "--head", branch, "--state", "all",
+                 "--json", "number,state,url"],
+                repo_path,
+            )
+        except Exception:
+            return  # gh unreachable / not auth'd — fall through to local guard
+        try:
+            prs = json.loads(raw) if raw else []
+        except (TypeError, json.JSONDecodeError):
+            return
+        for pr in prs or []:
+            if pr.get("state") in ("OPEN", "MERGED"):
+                raise GuardrailError(
+                    f"chunk already has a {pr['state']} PR #{pr['number']} "
+                    f"on branch '{branch}': {pr.get('url')}"
+                )
+
+    def _flip_proposal_chunk(self, repo_path: str, proposal_path: str,
+                              chunk_index: int) -> None:
+        """Apply `chunks.flip_chunk` to the proposal markdown on the work
+        branch's tree. Raises GuardrailError on any failure; we'd rather abort
+        a chunk than land an implementation without the state-change diff."""
+        # The chunks module lives next to dispatch.py; import lazily so the
+        # picker-free mode doesn't depend on it.
+        sys.path.insert(0, HERE)
+        try:
+            import chunks as ch
+        except ImportError as exc:
+            raise GuardrailError(f"cannot import chunks module: {exc}") from exc
+
+        full = os.path.join(repo_path, proposal_path)
+        if not os.path.isfile(full):
+            raise GuardrailError(f"proposal not found: {full}")
+        text = open(full).read()
+        try:
+            new_text = ch.flip_chunk(text, chunk_index)
+        except ValueError as exc:
+            raise GuardrailError(f"checkbox flip failed: {exc}") from exc
+        with open(full, "w") as fh:
+            fh.write(new_text)
 
 
 # --------------------------------------------------------------------------- #
@@ -282,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--task")
     ap.add_argument("--instructions")
     ap.add_argument("--preflight-only", action="store_true")
+    ap.add_argument("--proposal-path",
+                    help="enable chunk-mode: relative path to the proposal markdown")
+    ap.add_argument("--chunk-index", type=int,
+                    help="enable chunk-mode: 1-based index of the chunk this run lands")
     args = ap.parse_args(argv)
 
     if not os.path.exists(args.config):
@@ -298,7 +402,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if not (args.repo and args.task and args.instructions):
             raise GuardrailError("--repo, --task and --instructions are required")
-        record = disp.dispatch(args.repo, args.task, args.instructions)
+        # Chunk mode requires both flags or neither.
+        if (args.proposal_path is None) ^ (args.chunk_index is None):
+            raise GuardrailError(
+                "chunk mode requires both --proposal-path and --chunk-index"
+            )
+        record = disp.dispatch(
+            args.repo, args.task, args.instructions,
+            proposal_path=args.proposal_path,
+            chunk_index=args.chunk_index,
+        )
         print(json.dumps({"ok": True, "record": record}, indent=2, default=str))
         return 0
     except GuardrailError as exc:

@@ -174,6 +174,163 @@ def test_per_run_over_budget_flagged_but_completes():
         assert rec["pr_url"]  # work exists; surfaced for human review
 
 
+# --------------------------------------------------------------------------- #
+# Chunk-mode (V1): deterministic branch, gh idempotency, atomic box flip
+# --------------------------------------------------------------------------- #
+PROPOSAL_BODY = """\
+---
+id: dolios/p1
+status: approved
+---
+
+# Title
+
+## Intervention
+
+- [ ] **Chunk 1** — first
+- [ ] **Chunk 2** — second
+"""
+
+
+def _write_proposal(tmp_root, repo_relpath, body=PROPOSAL_BODY):
+    """Drop a proposal at <repo>/<relpath>. Returns (full_repo_path, full_md_path).
+    Matches how the real allowlist + proposals/ layout looks."""
+    repo = os.path.join(tmp_root, "repo")
+    os.makedirs(os.path.join(repo, ".git"), exist_ok=True)
+    md = os.path.join(repo, repo_relpath)
+    os.makedirs(os.path.dirname(md), exist_ok=True)
+    with open(md, "w") as fh:
+        fh.write(body)
+    return repo, md
+
+
+class FakeRepoWithProposal(FakeRepo):
+    """FakeRepo + a real on-disk proposal at proposals/dolios/p1.md so
+    flip_chunk has something to edit."""
+
+    def __init__(self, repo_path, *, gh_pr_list_response="[]", **kw):
+        super().__init__(**kw)
+        self.repo_path = repo_path
+        self.gh_pr_list_response = gh_pr_list_response
+
+    def gh(self, args, cwd):
+        self.gh_calls.append(args)
+        # Idempotency check uses `pr list --head <branch> ...`
+        if args[:2] == ["pr", "list"]:
+            return self.gh_pr_list_response
+        return "https://github.com/dolas/dolios/pull/1"
+
+
+def test_chunk_mode_uses_deterministic_branch_and_flips_the_box():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, md = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(repo_path)
+        # Build a config whose allowlist points at this fake repo
+        ledger = os.path.join(tmp, "ledger.jsonl")
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=ledger))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1_700_000_000.0)
+        disp = d.Dispatcher(cfg, runners)
+
+        rec = disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "do chunk 1",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        )
+        # Deterministic branch — no timestamp suffix
+        assert rec["branch"] == "auto/coder/dolios-p1-chunk-1"
+        assert rec["chunk_flipped"] is True
+        # Box flipped in the proposal markdown on disk
+        with open(md) as fh:
+            body = fh.read()
+        assert "- [x] **Chunk 1**" in body
+        assert "- [ ] **Chunk 2**" in body
+        # PR was opened
+        assert any(c[:2] == ["pr", "create"] for c in repo.gh_calls)
+
+
+def test_chunk_mode_refuses_when_open_pr_already_exists():
+    """If gh reports an OPEN PR on this chunk's branch, abort — chunk in flight."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, _ = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(
+            repo_path,
+            gh_pr_list_response=json.dumps([{
+                "number": 42, "state": "OPEN", "url": "https://x/42",
+            }]),
+        )
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=os.path.join(tmp, "l.jsonl")))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        msg = _expect_guardrail(lambda: disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "do chunk 1",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        ))
+        assert "OPEN PR" in msg and "42" in msg
+        assert not repo.claude_ran   # never ran a duplicate
+
+
+def test_chunk_mode_refuses_when_merged_pr_already_exists():
+    """A MERGED PR for this chunk's branch means the chunk is already done —
+    the picker should have skipped it; refuse loudly."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, _ = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(
+            repo_path,
+            gh_pr_list_response=json.dumps([{
+                "number": 7, "state": "MERGED", "url": "https://x/7",
+            }]),
+        )
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=os.path.join(tmp, "l.jsonl")))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        msg = _expect_guardrail(lambda: disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "x",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        ))
+        assert "MERGED" in msg
+        assert not repo.claude_ran
+
+
+def test_chunk_mode_flip_failure_aborts_after_claude():
+    """If the box can't be flipped (e.g. already checked), surface a guardrail
+    error AFTER claude — we have no clean "undo" but at least we don't commit
+    a half-done state."""
+    body = PROPOSAL_BODY.replace("- [ ] **Chunk 1**", "- [x] **Chunk 1**")
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, _ = _write_proposal(tmp, "proposals/dolios/p1.md", body=body)
+        repo = FakeRepoWithProposal(repo_path)
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=os.path.join(tmp, "l.jsonl")))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        msg = _expect_guardrail(lambda: disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "x",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        ))
+        assert "already checked" in msg
+        # claude DID run (flip happens after) — that's the documented behavior;
+        # the loud failure prevents the implementation commit from landing
+        # without the state-change diff.
+        assert repo.claude_ran
+
+
+# --------------------------------------------------------------------------- #
+# Backwards compat: free-form (non-chunk) dispatches still work
+# --------------------------------------------------------------------------- #
 def test_no_changes_means_no_pr():
     with tempfile.TemporaryDirectory() as tmp:
         repo = FakeRepo(claude_changes=False)
