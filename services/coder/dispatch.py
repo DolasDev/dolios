@@ -113,8 +113,18 @@ def _real_git(args: list, cwd: str) -> str:
 
 
 def _real_claude(instructions: str, cwd: str) -> dict:
+    """Headless Claude Code with write/edit permissions granted.
+
+    `--dangerously-skip-permissions` is appropriate here because the dispatcher
+    bounds the work in code: branch off main (never base), allowlisted repo,
+    PR-not-merge. Without this flag, claude in headless `-p` mode refuses to
+    write files — the dispatcher would silently produce a no-op commit, and
+    in chunk mode that's catastrophic (would flip the checkbox without doing
+    the work). See _check_claude_made_changes guardrail too.
+    """
     out = subprocess.run(
-        ["claude", "-p", instructions, "--output-format", "json"],
+        ["claude", "-p", instructions, "--output-format", "json",
+         "--dangerously-skip-permissions"],
         cwd=cwd, check=True, capture_output=True, text=True,
     ).stdout
     return json.loads(out)
@@ -277,8 +287,20 @@ class Dispatcher:
         # both the work AND the chunk-done state change. Done AFTER claude (so
         # we know the chunk actually ran) but BEFORE `git add -A` (so the flip
         # gets bundled into the auto-coder commit).
+        #
+        # GUARDRAIL: refuse to flip if claude made no changes — would otherwise
+        # land a commit that marks the chunk "done" without any implementation.
+        # The flip itself counts as a tree change, so we can't check "anything
+        # in `git status` after the flip" — we have to check BEFORE.
         chunk_flipped = False
         if chunk_mode:
+            if not git("status", "--porcelain").strip():
+                raise GuardrailError(
+                    "claude made no changes in chunk mode — refusing to flip "
+                    f"the chunk-{chunk_index} checkbox (claude is_error="
+                    f"{result.get('is_error')}, cost_usd={cost}). Did claude "
+                    "lack write permissions, or refuse the work?"
+                )
             self._flip_proposal_chunk(repo_path, proposal_path, chunk_index)
             chunk_flipped = True
 

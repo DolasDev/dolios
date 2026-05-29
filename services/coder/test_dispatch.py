@@ -302,6 +302,34 @@ def test_chunk_mode_refuses_when_merged_pr_already_exists():
         assert not repo.claude_ran
 
 
+def test_chunk_mode_no_changes_from_claude_aborts_before_flipping_the_box():
+    """If claude makes zero changes (denied permissions, refused, errored),
+    the dispatcher must NOT flip the chunk checkbox — would otherwise advance
+    state on `main` without an implementation. Loud, no commit, no PR."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, md = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(repo_path, claude_changes=False)
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=os.path.join(tmp, "l.jsonl")))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        msg = _expect_guardrail(lambda: disp.dispatch(
+            "dolios", "dolios-p1-chunk-1", "x",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        ))
+        assert "no changes" in msg.lower()
+        # claude WAS run (we discovered the no-changes case after, not before)
+        assert repo.claude_ran
+        # Box must NOT be flipped; commit must NOT exist.
+        with open(md) as fh:
+            body = fh.read()
+        assert "- [ ] **Chunk 1**" in body
+        assert not repo.committed and not repo.pushed
+
+
 def test_chunk_mode_flip_failure_aborts_after_claude():
     """If the box can't be flipped (e.g. already checked), surface a guardrail
     error AFTER claude — we have no clean "undo" but at least we don't commit
