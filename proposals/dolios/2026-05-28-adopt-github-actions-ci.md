@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-05-28-adopt-github-actions-ci
-status: proposed
+status: approved
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L2@2026-05-28T21:17:28Z
 gap_ids:
