@@ -301,8 +301,32 @@ class Dispatcher:
         committed = False
         pr_url = ""
         try:
+            # In chunk mode, wrap the chunk instructions with a preamble so
+            # claude knows the dispatcher rules — without it, claude often
+            # flips the chunk's own checkbox proactively (helpful but breaks
+            # the atomic "implementation + flip in one diff" invariant) and
+            # the dispatcher's flip_chunk then aborts with "already checked".
+            if chunk_mode:
+                claude_prompt = (
+                    f"You are executing chunk {chunk_index} of an autonomous-coder "
+                    f"proposal at `{proposal_path}`.\n\n"
+                    f"Hard rules for chunk mode (the dispatcher will refuse "
+                    f"the work if you violate any of these):\n"
+                    f"- Do NOT modify `{proposal_path}` — not the frontmatter, "
+                    f"not the Intervention checkboxes, not the Outcome. The "
+                    f"dispatcher flips the chunk-{chunk_index} checkbox itself "
+                    f"in the same commit; if you flip it too, that collision "
+                    f"is detected and the run aborts.\n"
+                    f"- Stay strictly inside chunk {chunk_index}'s scope. Do "
+                    f"not implement future chunks.\n"
+                    f"- Do not run git or commit. The dispatcher handles "
+                    f"version control.\n\n"
+                    f"{instructions}"
+                )
+            else:
+                claude_prompt = instructions
             # Hand the actual engineering to Claude Code, inside the work branch.
-            result = self.r.claude(instructions, repo_path)
+            result = self.r.claude(claude_prompt, repo_path)
             cost = float(result.get("total_cost_usd", 0.0))
             over_run_budget = cost > self.cfg.budget.max_cost_usd_per_run
 

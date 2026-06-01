@@ -60,6 +60,7 @@ class FakeRepo:
 
     def claude(self, instructions, cwd):
         self.claude_ran = True
+        self.last_claude_prompt = instructions
         return {"total_cost_usd": self.cost, "is_error": False}
 
     def gh(self, args, cwd):
@@ -315,6 +316,47 @@ def test_chunk_mode_refuses_when_merged_pr_already_exists():
         ))
         assert "MERGED" in msg
         assert not repo.claude_ran
+
+
+def test_chunk_mode_prompt_warns_claude_off_the_proposal_file():
+    """Regression for a real bug seen on first autonomous run: claude
+    proactively flipped the chunk's own checkbox, then the dispatcher's
+    flip_chunk collided with the already-`[x]` state and aborted. Fix is to
+    wrap the chunk instructions with a preamble that names the proposal path
+    as off-limits and tells claude the dispatcher handles state."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo_path, _ = _write_proposal(tmp, "proposals/dolios/p1.md")
+        repo = FakeRepoWithProposal(repo_path)
+        cfg = d.Config(allowlist={"dolios": repo_path}, base_branch="main",
+                       branch_prefix="auto/coder",
+                       budget=d.Budget(ledger_path=os.path.join(tmp, "l.jsonl")))
+        runners = d.Runners(gate_decide=lambda: {"decision": "dispatch", "reason": "ok"},
+                            git=repo.git, claude=repo.claude, gh=repo.gh,
+                            now=lambda: 1.0)
+        disp = d.Dispatcher(cfg, runners)
+        disp.dispatch(
+            "dolios", "task-1", "do the chunk work",
+            proposal_path="proposals/dolios/p1.md", chunk_index=1,
+        )
+        prompt = repo.last_claude_prompt
+        # Original instructions preserved verbatim.
+        assert "do the chunk work" in prompt
+        # Proposal path is named as off-limits, with the right chunk index.
+        assert "proposals/dolios/p1.md" in prompt
+        assert "chunk 1" in prompt
+        # Hard rules show up by their key terms.
+        for phrase in ("Do NOT modify", "dispatcher", "checkbox", "scope"):
+            assert phrase in prompt, f"missing: {phrase!r}"
+
+
+def test_free_form_mode_leaves_prompt_untouched():
+    """The chunk-mode preamble must not leak into free-form runs (legacy /
+    ad-hoc dispatches)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepo()
+        _, _, disp = make(tmp, repo)
+        disp.dispatch("dolios", "TASK-1", "fix the docstring on foo()")
+        assert repo.last_claude_prompt == "fix the docstring on foo()"
 
 
 def test_chunk_mode_no_changes_from_claude_aborts_before_flipping_the_box():
