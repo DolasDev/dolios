@@ -1,30 +1,36 @@
 #!/command/with-contenv sh
-# Wire git's credential helper to use GH_TOKEN (passed in via env_file from the
-# profile .env). Without this, the autonomous coder can git-commit fine inside
-# the container but `git push origin <branch>` fails — the dolios remote is
-# SSH-keyed on the host (git@github.com:…) and no SSH keys are mounted into
-# the container. `gh auth setup-git` writes a credential.https.helper line into
-# the hermes user's ~/.gitconfig that delegates HTTPS auth to gh, which uses
-# GH_TOKEN. Idempotent — running it again just overwrites the same line.
+# Wire git so the autonomous coder can push from inside the container without
+# SSH keys. Two pieces:
 #
-# IMPORTANT: shebang must be `#!/command/with-contenv sh`, not `#!/bin/sh`.
-# s6-overlay's PID 1 sanitizes the env down to PATH only; `with-contenv`
-# re-injects the docker-set environment (including GH_TOKEN from env_file).
-# All the official Nous cont-init.d hooks use this same shebang for the same
-# reason — verified against /etc/cont-init.d/02-reconcile-profiles inside the
-# running base image.
-set -e
+#   1. `gh auth setup-git` writes a credential.https.github.com.helper line
+#      into the hermes user's ~/.gitconfig that delegates HTTPS auth to gh,
+#      which uses GH_TOKEN (passed in via env_file from the profile .env).
+#
+#   2. `url.https://github.com/.insteadOf git@github.com:` rewrites the
+#      dolios remote's SSH URL (git@github.com:DolasDev/dolios.git) to its
+#      HTTPS equivalent at git op time. Without this, git push tries SSH,
+#      the container has no SSH keys, host-key verification fails.
+#
+# Both land in /opt/data/.gitconfig (the hermes user's $HOME = /opt/data),
+# which is on the bind-mounted host ~/.hermes, so the config survives
+# container restarts.
+#
+# Notes:
+#   - Shebang is `#!/command/with-contenv sh`, NOT `#!/bin/sh` — s6-overlay
+#     sanitizes PID 1's env down to PATH only; with-contenv re-injects the
+#     docker env (GH_TOKEN among them).
+#   - `HOME=/opt/data` is required when going through `s6-setuidgid hermes` —
+#     s6-setuidgid sets uid/gid but does NOT change HOME, so gh and git would
+#     otherwise read/write at /root/.config/... and /root/.gitconfig.
 
 if [ -z "${GH_TOKEN:-}" ]; then
     echo "[gh-git-setup] GH_TOKEN not set — skipping (autonomous push will fail until it is)"
     exit 0
 fi
 
-# Run as the remapped hermes user (UID/GID set by 01-hermes-setup's stage2 hook,
-# which has already finished by the time this 03- hook runs). hermes's HOME is
-# /opt/data, so the helper line lands in /opt/data/.gitconfig — which lives on
-# the bind-mounted host ~/.hermes, so the config persists across container
-# restarts.
-s6-setuidgid hermes gh auth setup-git \
-    && echo "[gh-git-setup] git credential helper wired to GH_TOKEN" \
-    || echo "[gh-git-setup] gh auth setup-git failed (push will fail until fixed)"
+HOME=/opt/data s6-setuidgid hermes sh -c '
+    set -e
+    gh auth setup-git
+    git config --global url."https://github.com/".insteadOf "git@github.com:"
+' && echo "[gh-git-setup] credential helper + SSH→HTTPS rewrite installed for hermes" \
+  || echo "[gh-git-setup] setup failed (autonomous push will fail until fixed)"
