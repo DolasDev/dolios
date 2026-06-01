@@ -45,6 +45,11 @@ services:
       # 1000), so files created in the container stay host-readable/writable.
       - HERMES_UID=1000
       - HERMES_GID=1000
+      # REPOS_ROOT lets `coder.yaml`'s allowlist use `${REPOS_ROOT}/<repo>` so
+      # the same file works on host (REPOS_ROOT=$HOME/repos) and in the
+      # container (REPOS_ROOT=/opt/data/repos). dispatch.py's Config.load does
+      # the substitution at load time.
+      - REPOS_ROOT=/opt/data/repos
     # Profile secrets (OPENROUTER_API_KEY for fallback; GH_TOKEN for the PR path).
     env_file:
       - ${HOME}/.hermes/profiles/autonomous-coder/.env
@@ -55,9 +60,11 @@ services:
       # Claude Code credentials. Container HOME is /opt/data, so claude reads
       # /opt/data/.claude/.credentials.json. RW so OAuth token refresh persists.
       - ${HOME}/.claude:/opt/data/.claude
-      # TODO(coder, Phase 3 / HOST_BRINGUP step 5): mount the allowlisted repo
-      # checkouts the dispatcher works on and opens PRs from, e.g.:
-      # - ${HOME}/repos:/opt/data/repos
+      # Allowlisted repo checkouts. The autonomous-coder dispatches inside the
+      # container; coder.yaml's allowlist resolves to /opt/data/repos/<repo>
+      # via the REPOS_ROOT env above. Currently dolios itself is the only
+      # allowlisted repo (self-improvement).
+      - ${HOME}/repos:/opt/data/repos
     # Always-on supervisor, scoped to this employee. `--profile` is honoured by
     # hermes wherever it appears in argv (it sets HERMES_HOME in-process, after
     # the s6 cont-init hooks have run against /opt/data) — we can't lead with a

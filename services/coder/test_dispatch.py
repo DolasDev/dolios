@@ -99,6 +99,33 @@ def _expect_guardrail(fn):
     raise AssertionError("expected GuardrailError, none raised")
 
 
+def test_config_load_expands_env_vars_in_allowlist_paths():
+    """`${REPOS_ROOT}` style references in coder.yaml expand against os.environ
+    so the same file works on host and inside the container."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = os.path.join(tmp, "coder.yaml")
+        with open(cfg_path, "w") as fh:
+            fh.write("allowlist:\n  dolios: ${REPOS_ROOT}/dolios\n  pegasus: ${REPOS_ROOT}/pegasus\n")
+        os.environ["REPOS_ROOT"] = "/opt/data/repos"
+        try:
+            cfg = d.Config.load(cfg_path)
+        finally:
+            del os.environ["REPOS_ROOT"]
+        assert cfg.allowlist["dolios"] == "/opt/data/repos/dolios"
+        assert cfg.allowlist["pegasus"] == "/opt/data/repos/pegasus"
+
+
+def test_config_load_leaves_unknown_vars_literal_not_empty():
+    """A typo'd env var must NOT collapse to empty (would silently break the
+    allowlist); leave the literal ${VAR} so the path becomes a noisy invalid."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg_path = os.path.join(tmp, "coder.yaml")
+        with open(cfg_path, "w") as fh:
+            fh.write("allowlist:\n  dolios: ${PROBABLY_TYPO}/dolios\n")
+        cfg = d.Config.load(cfg_path)
+        assert cfg.allowlist["dolios"] == "${PROBABLY_TYPO}/dolios"
+
+
 def test_hold_aborts_before_any_work():
     with tempfile.TemporaryDirectory() as tmp:
         repo = FakeRepo()

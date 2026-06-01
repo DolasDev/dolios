@@ -71,8 +71,19 @@ class Config:
             import yaml
         except ImportError as exc:  # pragma: no cover
             raise GuardrailError("pyyaml is required to load coder config") from exc
+        import re as _re
         with open(path) as fh:
-            raw = yaml.safe_load(fh) or {}
+            text = fh.read()
+        # Expand ${VAR} references against the environment so one coder.yaml
+        # works on host (REPOS_ROOT=$HOME/repos) and inside the container
+        # (REPOS_ROOT=/opt/data/repos). Missing variables are left literal so
+        # typos don't paper over as empty strings.
+        text = _re.sub(
+            r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+            lambda m: os.environ.get(m.group(1), m.group(0)),
+            text,
+        )
+        raw = yaml.safe_load(text) or {}
         b = raw.get("budget", {})
         # ledger path is relative to the config file's repo root when relative
         ledger = b.get("ledger_path", Budget.ledger_path)

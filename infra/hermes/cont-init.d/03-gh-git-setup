@@ -1,0 +1,23 @@
+#!/bin/sh
+# Wire git's credential helper to use GH_TOKEN (passed in via env_file from the
+# profile .env). Without this, the autonomous coder can git-commit fine inside
+# the container but `git push origin <branch>` fails — the dolios remote is
+# SSH-keyed on the host (git@github.com:…) and no SSH keys are mounted into
+# the container. `gh auth setup-git` writes a credential.https.helper line into
+# the hermes user's ~/.gitconfig that delegates HTTPS auth to gh, which uses
+# GH_TOKEN. Idempotent — running it again just overwrites the same line.
+set -e
+
+if [ -z "${GH_TOKEN:-}" ]; then
+    echo "[gh-git-setup] GH_TOKEN not set — skipping (autonomous push will fail until it is)"
+    exit 0
+fi
+
+# Run as the remapped hermes user (UID/GID set by 01-hermes-setup's stage2 hook,
+# which has already finished by the time this 03- hook runs). hermes's HOME is
+# /opt/data, so the helper line lands in /opt/data/.gitconfig — which lives on
+# the bind-mounted host ~/.hermes, so the config persists across container
+# restarts.
+s6-setuidgid hermes gh auth setup-git \
+    && echo "[gh-git-setup] git credential helper wired to GH_TOKEN" \
+    || echo "[gh-git-setup] gh auth setup-git failed (push will fail until fixed)"

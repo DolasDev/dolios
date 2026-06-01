@@ -4,10 +4,12 @@
 # to do anything not permitted here — this file IS the guardrail surface.
 
 # Repos the coder is ALLOWED to touch. Anything not listed is refused outright.
-# name -> absolute path of a local clone on the host.
+# name -> absolute path of a local clone. Use ${REPOS_ROOT} so the same file
+# works on host (REPOS_ROOT=$HOME/repos) and inside the container
+# (REPOS_ROOT=/opt/data/repos); dispatch.Config.load expands at load time.
 allowlist:
-  dolios: /home/steve/repos/Dolios
-  # pegasus: /home/steve/repos/pegasus
+  dolios: ${REPOS_ROOT}/dolios
+  # pegasus: ${REPOS_ROOT}/pegasus
 
 # Git policy.
 base_branch: main          # the branch we branch OFF and target PRs at; never committed to directly

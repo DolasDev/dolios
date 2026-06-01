@@ -39,4 +39,9 @@ RUN set -eux; \
     gh --version; \
     claude --version
 
+# Container init hook (s6 cont-init.d) that wires git's credential helper to
+# GH_TOKEN, so autonomous pushes work without SSH keys. Runs at every container
+# start, after the base image's stage2 (which remaps the hermes UID/GID).
+COPY --chmod=0755 cont-init.d/03-gh-git-setup /etc/cont-init.d/03-gh-git-setup
+
 # ENTRYPOINT, CMD, HERMES_HOME=/opt/data and PATH are all inherited unchanged.
