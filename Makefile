@@ -16,7 +16,8 @@ SWITCH := ./infra/gpu-stack.sh
         usage usage-decide usage-test employee \
         coder-preflight coder-test \
         audit audit-gaps audit-test \
-        backlog-next backlog-test chunks-test
+        backlog-next backlog-test chunks-test \
+        tick tick-test
 
 up:
 	docker compose up -d
@@ -106,3 +107,12 @@ backlog-test:
 
 chunks-test:
 	@cd services/coder && python3 test_chunks.py
+
+# Single-tick orchestrator. What the supervisor cron runs each tick:
+# preflight → backlog.py → switch on kind. Replaces the prose prompt template,
+# so the 35B model never has to compose shell commands.
+tick:
+	@python3 services/coder/tick.py
+
+tick-test:
+	@cd services/coder && python3 test_tick.py

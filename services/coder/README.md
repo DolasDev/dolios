@@ -1,12 +1,15 @@
-# coder — guardrailed dispatcher + deterministic picker
+# coder — orchestrator + picker + dispatcher
 
-Two modules, one job: the autonomous-coder's per-tick decision.
+Three modules; the supervisor cron only ever invokes the first one:
 
+- **`tick.py`** — the **single-tick orchestrator**. What the cron actually
+  runs each tick. Does preflight → picker → switch on kind → invoke the right
+  worker, mechanically. The 35B supervisor never composes a shell command —
+  it just reports tick.py's JSON output. See `test_tick.py` (10 tests).
 - **`backlog.py`** — the deterministic picker. Reads the audit history +
   `proposals/` + `coder.yaml`'s allowlist; emits the next task as structured
-  JSON (`kind ∈ {audit, propose, empty}`). Keeps the "what to work on next"
-  logic in code rather than in the 35B's prompt. See `test_backlog.py` (10
-  tests).
+  JSON (`kind ∈ {audit, execute, remeasure, propose, empty}`). See
+  `test_backlog.py` (18 tests).
 - **`dispatch.py`** — the guardrailed dispatcher. The picker (or a human)
   hands it a repo + task + instructions; it enforces every safety rule in
   code rather than trusting the model:
@@ -23,13 +26,16 @@ Two modules, one job: the autonomous-coder's per-tick decision.
 ```sh
 cp services/coder/coder.example.yaml services/coder/coder.yaml   # then edit (git-ignored)
 make coder-preflight     # gate + budget check only
-make coder-test          # guardrail unit tests (mocked git/claude/gh)
+make coder-test          # dispatcher guardrail tests (mocked git/claude/gh)
 make backlog-next        # what would the next tick do? structured JSON
 make backlog-test        # picker tests (no model, no network)
+make chunks-test         # checkbox parser + flip_chunk tests
+make tick                # run one tick end-to-end (what the cron does)
+make tick-test           # orchestrator tests (subprocess-mocked)
 
+# Ad-hoc dispatch (skips the picker — useful for testing one chunk):
 python3 services/coder/dispatch.py \
   --repo dolios --task TASK-1 --instructions "Add a docstring to foo()"
-make chunks-test         # checkbox parser + flip_chunk tests
 ```
 
 ## Two dispatch modes
