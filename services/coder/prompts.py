@@ -165,19 +165,18 @@ def compose_remeasure_instructions(
     repo: str,
     proposal_path: str,
     pre_audit_ref: str,
-    post_audit_ref: str,
     today: str,
 ) -> str:
     """Instructions for a `kind=remeasure` dispatch. Free-form mode. Claude
-    reads the proposal, reads the pre/post audit rows, writes the Outcome
-    section, and flips `status: approved → done` + sets the `done:` date in
-    frontmatter. The dispatcher commits + pushes + opens the closing PR."""
+    runs the auditor (appending a fresh row), reads pre/post rows, writes
+    the Outcome section, flips `status: approved → done` + sets the `done:`
+    date in frontmatter. The dispatcher commits everything (new audit row +
+    proposal edits) in one PR."""
     memories = read_memories(root) or "(no prior learnings on file yet)"
     return _REMEASURE_TEMPLATE.format(
         repo=repo,
         proposal_path=proposal_path,
         pre_audit_ref=pre_audit_ref,
-        post_audit_ref=post_audit_ref,
         today=today,
         memories_block=memories,
     )
@@ -283,28 +282,52 @@ After writing, print one line: `Proposal written: proposals/{repo}/{today}-<your
 _REMEASURE_TEMPLATE = """\
 You are the autonomous-coder for the Dolios fleet, executing a kind=remeasure
 dispatch. All chunks of an approved proposal have landed; this dispatch
-closes the loop by populating its Outcome section and flipping its status.
+closes the loop by appending a fresh audit, populating the proposal's
+Outcome section, and flipping its status to done.
+
+# Step 1 — append a fresh audit row
+
+Run exactly this command (relative to repo root):
+  `python3 services/auditor/audit.py --repo . --name {repo} --history .dolios/metrics/{repo}/history.jsonl`
+
+This appends one new row to the history.jsonl. That's the POST measurement.
+
+# Step 2 — read pre + post
+
+- PRE (cited by the proposal's `audit:` frontmatter): `{pre_audit_ref}`
+- POST: the last line of `.dolios/metrics/{repo}/history.jsonl` (the one
+  you just appended).
+
+For each metric in the proposal's `metrics:` frontmatter list (and any guard
+metrics named in the Measurement plan section), read the value pre and post.
+Compute the delta.
+
+# Step 3 — edit the proposal at `{proposal_path}`
+
+- Populate `## Outcome` per the template's spec: one row per `metrics:`
+  frontmatter entry, in the same order. Add guard-metric rows if the
+  Measurement plan called them out, marked `(guard)`.
+- Set `done: {today}` in the YAML frontmatter.
+- Flip `status: approved` to `status: done` in the YAML frontmatter.
+- Also fill in the "Did the hypothesis hold?", "Unexpected movement", and
+  "What we learned" sub-points beneath the Outcome table, honestly and
+  briefly. Honest "missed" / "partial" verdicts are MORE valuable than
+  optimistic "met" ones — falsifiability is the whole point.
+
+# Optional — memory
+
+You MAY write at most ONE new memory at `infra/hermes/memories/NNNN-<slug>.md`
+(next unused NNNN) if the comparison surfaced a distilled lesson worth
+keeping (an estimation correction, an unexpected interaction, a regression
+that needs a future guardrail). Otherwise don't.
 
 # Hard rules
 
-- Edit EXACTLY this one file: `{proposal_path}`.
-  - Populate the `## Outcome` section per the template's spec (one row per
-    `metrics:` frontmatter entry, in the same order, plus any guard metrics).
-  - Set `done: {today}` in the YAML frontmatter.
-  - Flip `status: approved` to `status: done` in the YAML frontmatter.
-- You MAY write at most ONE new memory at `infra/hermes/memories/NNNN-<slug>.md`
-  if the comparison surfaced a distilled lesson worth keeping. Otherwise
-  don't.
-- Do NOT modify any other file. Do NOT commit, push, or run git. The
-  dispatcher handles version control.
-
-# The audit rows you must compare
-
-- pre  (the proposal's cited baseline): `{pre_audit_ref}`
-- post (the fresh row just appended):   `{post_audit_ref}`
-
-Read both rows. For each metric in the proposal's `metrics:` list, find the
-matching value pre and post, compute the delta, fill the Outcome table.
+- The ONLY files you may modify are: `.dolios/metrics/{repo}/history.jsonl`
+  (via running the audit command above), `{proposal_path}`, and optionally
+  ONE new file under `infra/hermes/memories/`.
+- Do NOT commit, push, or run git. The dispatcher handles version control.
+- Do NOT modify any chunk checkbox or any other proposal file.
 
 # Prior learnings
 
@@ -312,8 +335,8 @@ matching value pre and post, compute the delta, fill the Outcome table.
 
 # Output
 
-After writing, print one line: `Outcome populated: {proposal_path}`
-(and if you wrote a memory: `Memory written: infra/hermes/memories/NNNN-<slug>.md`).
+After writing, print: `Outcome populated: {proposal_path}` (and if you wrote
+a memory: `Memory written: infra/hermes/memories/NNNN-<slug>.md`).
 """
 
 

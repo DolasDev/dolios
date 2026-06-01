@@ -42,6 +42,24 @@ DOLIOS_ROOT = HERE.parent.parent  # services/coder/ → dolios/
 
 DEFAULT_LOG = DOLIOS_ROOT / ".dolios" / "tick-log.jsonl"
 
+
+def _extract_frontmatter_field(markdown_text: str, key: str) -> str | None:
+    """Quick-and-dirty YAML frontmatter field extractor — no pyyaml needed.
+    Returns the value of `key:` in the first `---`-delimited block at the top
+    of the file, or None. Single-line values only; this is enough for the
+    `audit:`, `status:`, `id:` fields we read from proposals."""
+    if not markdown_text.startswith("---\n"):
+        return None
+    end = markdown_text.find("\n---\n", 4)
+    if end == -1:
+        return None
+    fm = markdown_text[4:end]
+    import re as _re
+    m = _re.search(rf"^{_re.escape(key)}:\s*(.+)$", fm, _re.MULTILINE)
+    if not m:
+        return None
+    return m.group(1).strip()
+
 # Subprocess return shape.
 Runner = Callable[[list[str], Path], "tuple[int, str, str]"]
 
@@ -184,10 +202,7 @@ class TickRunner:
             self._handle_propose(job, record)
 
         elif kind == "remeasure":
-            # V1 (still deferred — see next commit).
-            record["deferred"] = (
-                "kind=remeasure not yet auto-implemented; see services/coder/README.md"
-            )
+            self._handle_remeasure(job, record)
 
         elif kind == "error":
             record["error"] = job.get("error", "picker reported error")
@@ -198,6 +213,69 @@ class TickRunner:
         self._log(record)
         return record
 
+
+    # -- kind=remeasure handler ----------------------------------------- #
+    def _handle_remeasure(self, job: dict, record: dict) -> None:
+        """Close out an approved-and-fully-implemented proposal: run a fresh
+        audit + write the Outcome + flip status: done — all in one
+        free-form dispatch. Claude's prompt instructs it to run the audit
+        command itself (appending the post-row) before reading and writing,
+        so the new audit row + the Outcome edits land in a single commit /
+        PR rather than racing through two separate ones."""
+        sys.path.insert(0, str(self.root / "services" / "coder"))
+        try:
+            import prompts as _prompts
+        except ImportError as exc:
+            record["error"] = f"cannot import prompts module: {exc}"
+            return
+
+        repo = job.get("repo")
+        proposal_path = job.get("proposal_path")
+        proposal_id = job.get("proposal_id", "")
+        if not (repo and proposal_path):
+            record["error"] = f"remeasure job missing repo or proposal_path: {job}"
+            return
+
+        # Read the proposal's frontmatter to recover the pre-audit citation.
+        full_path = self.root / proposal_path
+        if not full_path.is_file():
+            record["error"] = f"proposal not found at {full_path}"
+            return
+        text = full_path.read_text(encoding="utf-8")
+        pre_audit_ref = _extract_frontmatter_field(text, "audit") or "(not found)"
+
+        today = time.strftime("%Y-%m-%d", time.gmtime(self._now()))
+        instructions = _prompts.compose_remeasure_instructions(
+            root=self.root, repo=repo, proposal_path=proposal_path,
+            pre_audit_ref=pre_audit_ref, today=today,
+        )
+
+        # Deterministic task_id from the proposal id. Idempotency precheck
+        # refuses if a remeasure-PR for the same proposal is already open.
+        task_id = "remeasure-" + proposal_id.replace("/", "-")
+        ex_rc, ex_out, ex_err = self._runner(
+            [
+                "python3", "services/coder/dispatch.py",
+                "--repo",         repo,
+                "--task",         task_id,
+                "--instructions", instructions,
+            ],
+            self.root,
+        )
+        record["dispatch_rc"] = ex_rc
+        record["task_id"] = task_id
+        try:
+            disp = json.loads(ex_out)
+        except (json.JSONDecodeError, ValueError):
+            record["dispatch_error"] = (ex_out or ex_err)[-400:]
+            return
+        if disp.get("ok"):
+            inner = disp.get("record", {})
+            record["pr_url"]   = inner.get("pr_url")
+            record["cost_usd"] = inner.get("cost_usd")
+            record["branch"]   = inner.get("branch")
+        else:
+            record["dispatch_error"] = disp.get("error", "")
 
     # -- kind=propose handler ------------------------------------------- #
     def _handle_propose(self, job: dict, record: dict) -> None:

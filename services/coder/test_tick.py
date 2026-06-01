@@ -304,21 +304,78 @@ def test_propose_with_missing_audit_history_records_error_cleanly():
         assert not any("--task" in c for c in tr._runner.calls)
 
 
-def test_remeasure_kind_same_deferred_path():
+def test_remeasure_kind_dispatches_with_pre_audit_ref_from_proposal_frontmatter():
+    """The remeasure handler reads the proposal's `audit:` frontmatter field
+    to recover the pre-measurement citation, composes the remeasure prompt
+    around it, and dispatches in free-form mode with a deterministic
+    `remeasure-<proposal-id>` task_id."""
     with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # Seed an approved proposal with all chunks `[x]` and a baseline
+        # audit citation.
+        (root / "proposals" / "dolios").mkdir(parents=True)
+        (root / "proposals" / "dolios" / "p1.md").write_text(
+            "---\n"
+            "id:     dolios/p1\n"
+            "status: approved\n"
+            "repo:   dolios\n"
+            "audit:  .dolios/metrics/dolios/history.jsonl#L2@2026-05-28T21:17:28Z\n"
+            "---\n\n"
+            "## Intervention\n\n"
+            "- [x] **Chunk 1**\n"
+            "- [x] **Chunk 2**\n"
+        )
+        dispatch_response = json.dumps({
+            "ok": True,
+            "record": {
+                "pr_url": "https://example/pr/9",
+                "cost_usd": 1.5,
+                "branch": "auto/coder/remeasure-dolios-p1",
+            },
+        })
         tr = _make({
             "--preflight-only": _preflight_ok(),
             "backlog.py":       (0, json.dumps({
                 "kind": "remeasure",
                 "repo": "dolios",
                 "proposal_id": "dolios/p1",
+                "proposal_path": "proposals/dolios/p1.md",
                 "rationale": "all chunks done",
-                "command_audit": "...",
+            }), ""),
+            "remeasure-dolios-p1": (0, dispatch_response, ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "remeasure"
+        assert record["dispatch_rc"] == 0
+        assert record["pr_url"] == "https://example/pr/9"
+        assert record["task_id"] == "remeasure-dolios-p1"
+        # Inspect the dispatched instructions — must carry pre-audit ref +
+        # the audit-command claude will run for the post measurement.
+        disp_call = tr._runner.calls[-1]
+        inst_arg = disp_call[disp_call.index("--instructions") + 1]
+        assert "L2@2026-05-28T21:17:28Z" in inst_arg   # pre-audit ref
+        assert "services/auditor/audit.py" in inst_arg # post-audit command
+        assert "proposals/dolios/p1.md" in inst_arg
+        assert "approved" in inst_arg                  # status flip mentioned
+
+
+def test_remeasure_with_missing_proposal_records_error_cleanly():
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "backlog.py":       (0, json.dumps({
+                "kind": "remeasure",
+                "repo": "dolios",
+                "proposal_id": "dolios/missing",
+                "proposal_path": "proposals/dolios/missing.md",
+                "rationale": "all chunks done",
             }), ""),
         }, tmp)
         record = tr.run_tick()
         assert record["kind"] == "remeasure"
-        assert record.get("deferred")
+        assert "proposal not found" in record["error"]
+        # No dispatch call should have happened.
+        assert not any("remeasure-" in str(c) for c in tr._runner.calls)
 
 
 # --------------------------------------------------------------------------- #
