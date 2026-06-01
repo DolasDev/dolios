@@ -44,11 +44,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import chunks as ch
@@ -96,8 +95,8 @@ def _parse_frontmatter(path: Path) -> dict | None:
     file has no `---` block at the top."""
     try:
         import yaml
-    except ImportError:
-        raise RuntimeError("pyyaml is required to parse proposal frontmatter")
+    except ImportError as exc:
+        raise RuntimeError("pyyaml is required to parse proposal frontmatter") from exc
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
@@ -233,8 +232,13 @@ def _audit_task(b: RepoBacklog) -> dict:
         "kind": "audit",
         "repo": b.name,
         "repo_path": str(b.path),
-        "rationale": ("first audit for repo" if b.last_audit_ts is None
-                      else f"audit > {STALE_AUDIT_DAYS}d old (last {datetime.fromtimestamp(b.last_audit_ts, tz=timezone.utc).isoformat()}Z)"),
+        "rationale": (
+            "first audit for repo" if b.last_audit_ts is None
+            else (
+                f"audit > {STALE_AUDIT_DAYS}d old (last "
+                f"{datetime.fromtimestamp(b.last_audit_ts, tz=UTC).isoformat()}Z)"
+            )
+        ),
         "command": (
             f"python3 services/auditor/audit.py --repo {b.path} "
             f"--name {b.name} "
@@ -400,8 +404,13 @@ def main(argv=None) -> int:
 
     cfg = Path(args.config)
     if not cfg.exists():
-        print(json.dumps({"kind": "error",
-                          "error": f"no config at {cfg} (copy coder.example.yaml → coder.yaml)"}, indent=2))
+        print(json.dumps(
+            {
+                "kind": "error",
+                "error": f"no config at {cfg} (copy coder.example.yaml → coder.yaml)",
+            },
+            indent=2,
+        ))
         return 2
 
     try:

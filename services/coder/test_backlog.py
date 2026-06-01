@@ -10,7 +10,6 @@ Runs under pytest, or standalone:  `python3 test_backlog.py`.
 """
 
 import json
-import os
 import sys
 import tempfile
 import time

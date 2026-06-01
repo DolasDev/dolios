@@ -482,9 +482,11 @@ def _run_standalone():
     failed = 0
     for fn in fns:
         try:
-            fn(); print(f"PASS {fn.__name__}")
+            fn()
+            print(f"PASS {fn.__name__}")
         except AssertionError as exc:
-            failed += 1; print(f"FAIL {fn.__name__}: {exc}")
+            failed += 1
+            print(f"FAIL {fn.__name__}: {exc}")
     print(f"\n{len(fns) - failed}/{len(fns)} passed")
     return 1 if failed else 0
 

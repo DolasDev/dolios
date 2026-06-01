@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".dolios", "infra/ollama"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
