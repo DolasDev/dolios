@@ -36,6 +36,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+import ci_api
+
 SCHEMA_VERSION = 1
 
 # Metrics deliberately not measured by V0 (no external tools / no API access).
@@ -46,6 +48,7 @@ SCHEMA_VERSION = 1
 NOT_MEASURED = [
     {"path": "ci.test_runs_on_pr", "tool": "GitHub Actions API", "needs": "GH_TOKEN env"},
     {"path": "ci.median_runtime_seconds", "tool": "GitHub Actions API", "needs": "GH_TOKEN env"},
+    {"path": "ci.success_rate_30d", "tool": "GitHub Actions API", "needs": "GH_TOKEN env"},
     {"path": "testing.coverage_percent", "tool": "coverage.py",
      "needs": "test runner integration"},
     {"path": "testing.flake_rate", "tool": "CI re-run analysis", "needs": "CI history"},
@@ -130,6 +133,24 @@ def _word_count(path: Path) -> int:
         return 0
 
 
+def _parse_github_remote(url: str) -> tuple[str, str] | None:
+    """Extract ``(owner, repo)`` from a GitHub remote URL. Returns ``None`` for
+    non-GitHub remotes or unparseable URLs — the caller falls back to the
+    not-measured shape in that case."""
+    url = url.strip()
+    if not url:
+        return None
+    # SSH form: git@github.com:owner/repo[.git]
+    m = re.match(r"git@github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    # HTTPS form: https://github.com/owner/repo[.git]
+    m = re.match(r"https?://[^/]*github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if m:
+        return m.group(1), m.group(2)
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Audit sections — each returns a dict for one area
 # --------------------------------------------------------------------------- #
@@ -178,25 +199,36 @@ def audit_commits(repo: Path) -> dict:
     }
 
 
-def audit_ci(repo: Path) -> dict:
-    """Presence of automated CI — DORA's 'continuous integration' capability."""
+def audit_ci(
+    repo: Path,
+    *,
+    gh_owner: str | None = None,
+    gh_repo: str | None = None,
+    gh_token: str | None = None,
+    lookback_days: int = LOOKBACK_DAYS,
+) -> dict:
+    """Presence of automated CI — DORA's 'continuous integration' capability.
+
+    Filesystem checks always run; the API-derived metrics
+    (``test_runs_on_pr``, ``median_runtime_seconds``, ``success_rate_30d``)
+    are populated when ``gh_token`` and ``gh_owner``/``gh_repo`` are provided,
+    and otherwise fall back to the V0 null-with-``_note`` shape.
+    """
     wf_dir = repo / ".github" / "workflows"
     workflows = sorted(wf_dir.glob("*.y*ml")) if wf_dir.exists() else []
     other_ci_files = (
         ".circleci/config.yml", ".gitlab-ci.yml", "azure-pipelines.yml", "Jenkinsfile",
     )
-    return {
+    out = {
         "github_actions_present": bool(workflows),
         "workflow_count": len(workflows),
         "workflow_files": [str(p.relative_to(repo)) for p in workflows],
         "other_ci_detected": any((repo / f).exists() for f in other_ci_files),
-        "test_runs_on_pr": None,  # not measurable from filesystem alone
-        "median_runtime_seconds": None,
-        "_note": (
-            "runtime + flake rate need CI log access (GH Actions API); "
-            "planned as a proposal output"
-        ),
     }
+    out.update(ci_api.gh_ci_metrics(
+        gh_owner, gh_repo, token=gh_token, lookback_days=lookback_days,
+    ))
+    return out
 
 
 def audit_testing(repo: Path) -> dict:
@@ -387,6 +419,28 @@ def derive_gaps(metrics: dict) -> list[dict]:
             ),
         })
 
+    # DORA's 'elite' change-failure-rate band is 0–15%; floored conservatively
+    # to 80% success. Only fires when the API path produced a real measurement.
+    success_rate = ci.get("success_rate_30d")
+    if success_rate is not None and success_rate < 0.80:
+        gaps.append({
+            "area": "ci",
+            "severity": "high",
+            "frameworks": ["DORA: Test reliability"],
+            "summary": (
+                f"CI success rate {success_rate:.0%} below 80% over 30d"
+            ),
+            "detail": (
+                "More than 1 in 5 CI runs on main is failing — tests are flaky "
+                "or main is broken on landing. The green-main invariant is the "
+                "precondition for trusting any other CI signal."
+            ),
+            "proposed_action": (
+                "Triage the last 30 days of failing runs; quarantine or fix "
+                "flaky tests; gate new work behind a green main."
+            ),
+        })
+
     if not docs["license_present"]:
         gaps.append({
             "area": "compliance",
@@ -522,10 +576,31 @@ def derive_gaps(metrics: dict) -> list[dict]:
 # --------------------------------------------------------------------------- #
 # Top-level
 # --------------------------------------------------------------------------- #
-def run(repo: Path, name: str) -> dict:
+def run(
+    repo: Path,
+    name: str,
+    *,
+    gh_repo: str | None = None,
+    gh_token: str | None = None,
+) -> dict:
+    gh_owner_val: str | None = None
+    gh_repo_val: str | None = None
+    if gh_repo and "/" in gh_repo:
+        gh_owner_val, gh_repo_val = gh_repo.split("/", 1)
+    else:
+        remote = _git(repo, "remote", "get-url", "origin").strip()
+        parsed = _parse_github_remote(remote)
+        if parsed:
+            gh_owner_val, gh_repo_val = parsed
+
     metrics = {
         "commits": audit_commits(repo),
-        "ci": audit_ci(repo),
+        "ci": audit_ci(
+            repo,
+            gh_owner=gh_owner_val,
+            gh_repo=gh_repo_val,
+            gh_token=gh_token,
+        ),
         "testing": audit_testing(repo),
         "docs": audit_docs(repo),
         "security": audit_security(repo),
@@ -559,6 +634,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--history", help="append the snapshot to this JSONL history file")
     ap.add_argument("--gaps", action="store_true", help="emit only the ranked gaps")
+    ap.add_argument(
+        "--gh-repo",
+        help=(
+            "OWNER/REPO override for the GH Actions API call "
+            "(used when the local checkout has no `origin` remote)"
+        ),
+    )
     args = ap.parse_args(argv)
 
     repo = Path(args.repo).resolve()
@@ -566,7 +648,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": False, "error": f"no such directory: {repo}"}), file=sys.stderr)
         return 2
 
-    snapshot = run(repo, args.name)
+    snapshot = run(
+        repo, args.name,
+        gh_repo=args.gh_repo,
+        gh_token=os.environ.get("GH_TOKEN"),
+    )
     out = snapshot["gaps"] if args.gaps else snapshot
     print(json.dumps(out, indent=2))
 

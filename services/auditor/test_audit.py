@@ -14,9 +14,11 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import audit as a
+import ci_api
 
 
 # --------------------------------------------------------------------------- #
@@ -118,6 +120,104 @@ def test_ci_workflow_presence_clears_ci_gap():
         assert snap["metrics"]["ci"]["github_actions_present"] is True
         assert snap["metrics"]["ci"]["workflow_count"] == 1
         assert "ci" not in {g["area"] for g in snap["gaps"]}
+
+
+# --------------------------------------------------------------------------- #
+# GH Actions API: mocked response flips ci.* from not_measured to measured.
+# --------------------------------------------------------------------------- #
+def _iso(dt):
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def test_ci_api_mocked_response_flips_not_measured_to_measured():
+    """With a fake GH Actions API payload, audit_ci's API-derived fields move
+    from None to real values and the new ci.success_rate_30d slot is set."""
+    now = datetime.now(UTC)
+    workflow_runs = [
+        # 120s, success, push — counts toward median + success rate.
+        {
+            "status": "completed", "conclusion": "success", "event": "push",
+            "run_started_at": _iso(now - timedelta(days=2)),
+            "updated_at": _iso(now - timedelta(days=2) + timedelta(seconds=120)),
+        },
+        # 180s, success, pull_request — flips test_runs_on_pr.
+        {
+            "status": "completed", "conclusion": "success", "event": "pull_request",
+            "run_started_at": _iso(now - timedelta(days=5)),
+            "updated_at": _iso(now - timedelta(days=5) + timedelta(seconds=180)),
+        },
+        # 240s, failure — drags success rate down.
+        {
+            "status": "completed", "conclusion": "failure", "event": "push",
+            "run_started_at": _iso(now - timedelta(days=7)),
+            "updated_at": _iso(now - timedelta(days=7) + timedelta(seconds=240)),
+        },
+        # in-progress run — must be ignored.
+        {
+            "status": "in_progress", "conclusion": None, "event": "push",
+            "run_started_at": _iso(now - timedelta(hours=1)),
+            "updated_at": _iso(now - timedelta(hours=1)),
+        },
+    ]
+
+    original = ci_api._http_get_json
+    ci_api._http_get_json = lambda url, headers: {"workflow_runs": workflow_runs}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _init_git(repo, commits=[("a.py", "x = 1\n")])
+            snap = a.run(repo, "t", gh_repo="DolasDev/dolios", gh_token="fake-token")
+    finally:
+        ci_api._http_get_json = original
+
+    ci = snap["metrics"]["ci"]
+    # All three API-derived fields are now measured.
+    assert ci["test_runs_on_pr"] is True
+    assert isinstance(ci["median_runtime_seconds"], int)
+    assert ci["median_runtime_seconds"] == 180  # median of [120, 180, 240]
+    assert ci["success_rate_30d"] == round(2 / 3, 3)
+    # _note is only present in the not-measured shape — measured runs drop it.
+    assert "_note" not in ci
+
+
+def test_ci_api_low_success_rate_adds_dora_test_reliability_gap():
+    """When the mocked API response shows < 80% success over 30d, derive_gaps
+    must add a ci/high gap framed against DORA: Test reliability."""
+    now = datetime.now(UTC)
+    # 1 success + 4 failures = 20% — well below the 80% floor.
+    workflow_runs = [
+        {
+            "status": "completed", "conclusion": "success", "event": "push",
+            "run_started_at": _iso(now - timedelta(days=1)),
+            "updated_at": _iso(now - timedelta(days=1) + timedelta(seconds=60)),
+        },
+    ] + [
+        {
+            "status": "completed", "conclusion": "failure", "event": "push",
+            "run_started_at": _iso(now - timedelta(days=i + 2)),
+            "updated_at": _iso(now - timedelta(days=i + 2) + timedelta(seconds=60)),
+        }
+        for i in range(4)
+    ]
+
+    original = ci_api._http_get_json
+    ci_api._http_get_json = lambda url, headers: {"workflow_runs": workflow_runs}
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            # CI workflow present so the "no CI" gap doesn't dominate.
+            (repo / ".github" / "workflows").mkdir(parents=True)
+            (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\non: [push]\n")
+            _init_git(repo, commits=[("a.py", "x = 1\n")])
+            snap = a.run(repo, "t", gh_repo="DolasDev/dolios", gh_token="fake-token")
+    finally:
+        ci_api._http_get_json = original
+
+    ci_gaps = [g for g in snap["gaps"] if g["area"] == "ci"]
+    assert any(
+        g["severity"] == "high" and "DORA: Test reliability" in g["frameworks"]
+        for g in ci_gaps
+    ), ci_gaps
 
 
 # --------------------------------------------------------------------------- #
