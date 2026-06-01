@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/command/with-contenv sh
 # Wire git's credential helper to use GH_TOKEN (passed in via env_file from the
 # profile .env). Without this, the autonomous coder can git-commit fine inside
 # the container but `git push origin <branch>` fails — the dolios remote is
@@ -6,6 +6,13 @@
 # the container. `gh auth setup-git` writes a credential.https.helper line into
 # the hermes user's ~/.gitconfig that delegates HTTPS auth to gh, which uses
 # GH_TOKEN. Idempotent — running it again just overwrites the same line.
+#
+# IMPORTANT: shebang must be `#!/command/with-contenv sh`, not `#!/bin/sh`.
+# s6-overlay's PID 1 sanitizes the env down to PATH only; `with-contenv`
+# re-injects the docker-set environment (including GH_TOKEN from env_file).
+# All the official Nous cont-init.d hooks use this same shebang for the same
+# reason — verified against /etc/cont-init.d/02-reconcile-profiles inside the
+# running base image.
 set -e
 
 if [ -z "${GH_TOKEN:-}" ]; then
