@@ -33,7 +33,7 @@ import re
 import statistics
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -44,14 +44,15 @@ SCHEMA_VERSION = 1
 # that the first proposal had to hand-quote. Adopting any of these tools is
 # its own proposal.
 NOT_MEASURED = [
-    {"path": "ci.test_runs_on_pr",         "tool": "GitHub Actions API",   "needs": "GH_TOKEN env"},
-    {"path": "ci.median_runtime_seconds",  "tool": "GitHub Actions API",   "needs": "GH_TOKEN env"},
-    {"path": "testing.coverage_percent",   "tool": "coverage.py",          "needs": "test runner integration"},
-    {"path": "testing.flake_rate",         "tool": "CI re-run analysis",   "needs": "CI history"},
-    {"path": "docs.doc_coverage_percent",  "tool": "interrogate",          "needs": "new dep"},
-    {"path": "security.real_secret_findings", "tool": "gitleaks",          "needs": "new dep"},
+    {"path": "ci.test_runs_on_pr", "tool": "GitHub Actions API", "needs": "GH_TOKEN env"},
+    {"path": "ci.median_runtime_seconds", "tool": "GitHub Actions API", "needs": "GH_TOKEN env"},
+    {"path": "testing.coverage_percent", "tool": "coverage.py",
+     "needs": "test runner integration"},
+    {"path": "testing.flake_rate", "tool": "CI re-run analysis", "needs": "CI history"},
+    {"path": "docs.doc_coverage_percent", "tool": "interrogate", "needs": "new dep"},
+    {"path": "security.real_secret_findings", "tool": "gitleaks", "needs": "new dep"},
     {"path": "security.openssf_scorecard_score", "tool": "scorecard-action", "needs": "CI"},
-    {"path": "dependencies.vulnerable_count", "tool": "osv-scanner",        "needs": "new dep"},
+    {"path": "dependencies.vulnerable_count", "tool": "osv-scanner", "needs": "new dep"},
 ]
 
 # How many days of history to scan for git-based metrics (commit cadence, sizes).
@@ -87,8 +88,8 @@ SECRET_PATTERNS = [
 # Helpers
 # --------------------------------------------------------------------------- #
 def _iso(ts: float | None = None) -> str:
-    ts = ts if ts is not None else datetime.now(timezone.utc).timestamp()
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    ts = ts if ts is not None else datetime.now(UTC).timestamp()
+    return datetime.fromtimestamp(int(ts), tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -142,7 +143,11 @@ def audit_commits(repo: Path) -> dict:
     since = f"--since={LOOKBACK_DAYS}.days.ago"
     log = _git(repo, "log", since, "--pretty=tformat:===%H %ct", "--shortstat")
     if not log.strip():
-        return {"count": 0, "lookback_days": LOOKBACK_DAYS, "note": "no commits in lookback window or not a git repo"}
+        return {
+            "count": 0,
+            "lookback_days": LOOKBACK_DAYS,
+            "note": "no commits in lookback window or not a git repo",
+        }
     commits, sizes, authors = 0, [], set()
     cur = None
     for line in log.splitlines():
@@ -164,7 +169,10 @@ def audit_commits(repo: Path) -> dict:
         "count": commits,
         "lookback_days": LOOKBACK_DAYS,
         "median_lines_changed": int(statistics.median(sizes)) if sizes else 0,
-        "p95_lines_changed": int(statistics.quantiles(sizes, n=20)[-1]) if len(sizes) >= 20 else (max(sizes) if sizes else 0),
+        "p95_lines_changed": (
+            int(statistics.quantiles(sizes, n=20)[-1]) if len(sizes) >= 20
+            else (max(sizes) if sizes else 0)
+        ),
         "max_lines_changed": max(sizes) if sizes else 0,
         "distinct_authors": len(authors),
     }
@@ -172,15 +180,22 @@ def audit_commits(repo: Path) -> dict:
 
 def audit_ci(repo: Path) -> dict:
     """Presence of automated CI — DORA's 'continuous integration' capability."""
-    workflows = sorted((repo / ".github" / "workflows").glob("*.y*ml")) if (repo / ".github" / "workflows").exists() else []
+    wf_dir = repo / ".github" / "workflows"
+    workflows = sorted(wf_dir.glob("*.y*ml")) if wf_dir.exists() else []
+    other_ci_files = (
+        ".circleci/config.yml", ".gitlab-ci.yml", "azure-pipelines.yml", "Jenkinsfile",
+    )
     return {
         "github_actions_present": bool(workflows),
         "workflow_count": len(workflows),
         "workflow_files": [str(p.relative_to(repo)) for p in workflows],
-        "other_ci_detected": any((repo / f).exists() for f in (".circleci/config.yml", ".gitlab-ci.yml", "azure-pipelines.yml", "Jenkinsfile")),
+        "other_ci_detected": any((repo / f).exists() for f in other_ci_files),
         "test_runs_on_pr": None,  # not measurable from filesystem alone
         "median_runtime_seconds": None,
-        "_note": "runtime + flake rate need CI log access (GH Actions API); planned as a proposal output",
+        "_note": (
+            "runtime + flake rate need CI log access (GH Actions API); "
+            "planned as a proposal output"
+        ),
     }
 
 
@@ -198,15 +213,21 @@ def audit_testing(repo: Path) -> dict:
             continue
         s = str(rel).replace("\\", "/")
         (test_files if test_re.search(s) else source_files).append(s)
-    has_pytest_config = any((repo / p).exists() for p in ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini"))
+    pytest_cfg_files = ("pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini")
+    has_pytest_config = any((repo / p).exists() for p in pytest_cfg_files)
     return {
         "test_files": len(test_files),
         "source_files": len(source_files),
-        "test_to_source_ratio": round(len(test_files) / len(source_files), 3) if source_files else None,
+        "test_to_source_ratio": (
+            round(len(test_files) / len(source_files), 3) if source_files else None
+        ),
         "pytest_config_present": has_pytest_config,
         "coverage_measured": False,
         "coverage_percent": None,
-        "_note": "coverage % + flake rate not measured in V0 (need test-run integration); planned as a proposal output",
+        "_note": (
+            "coverage % + flake rate not measured in V0 (need test-run integration); "
+            "planned as a proposal output"
+        ),
     }
 
 
@@ -218,11 +239,21 @@ def audit_docs(repo: Path) -> dict:
         "readme_word_count": _word_count(readme) if readme.exists() else 0,
         "contributing_present": (repo / "CONTRIBUTING.md").exists(),
         "code_of_conduct_present": (repo / "CODE_OF_CONDUCT.md").exists(),
-        "license_present": (repo / "LICENSE").exists() or (repo / "LICENSE.md").exists() or (repo / "LICENSE.txt").exists(),
+        "license_present": (
+            (repo / "LICENSE").exists()
+            or (repo / "LICENSE.md").exists()
+            or (repo / "LICENSE.txt").exists()
+        ),
         "security_md_present": (repo / "SECURITY.md").exists(),
-        "codeowners_present": (repo / "CODEOWNERS").exists() or (repo / ".github" / "CODEOWNERS").exists(),
+        "codeowners_present": (
+            (repo / "CODEOWNERS").exists()
+            or (repo / ".github" / "CODEOWNERS").exists()
+        ),
         "doc_coverage_measured": False,
-        "_note": "public-API docstring coverage (interrogate / similar) not measured in V0; planned as a proposal output",
+        "_note": (
+            "public-API docstring coverage (interrogate / similar) not measured in V0; "
+            "planned as a proposal output"
+        ),
     }
 
 
@@ -245,8 +276,13 @@ def audit_security(repo: Path) -> dict:
         "regex_secret_findings": findings,
         "regex_secret_finding_count": len(findings),
         "osv_scanner_present": (repo / ".osv-scanner.toml").exists(),
-        "openssf_scorecard_present": (repo / ".github" / "workflows" / "scorecard.yml").exists(),
-        "_note": "regex sweep is a placeholder for gitleaks (high FP rate by design); proper scanners are a proposal output",
+        "openssf_scorecard_present": (
+            (repo / ".github" / "workflows" / "scorecard.yml").exists()
+        ),
+        "_note": (
+            "regex sweep is a placeholder for gitleaks (high FP rate by design); "
+            "proper scanners are a proposal output"
+        ),
     }
 
 
@@ -257,19 +293,36 @@ def audit_dependencies(repo: Path) -> dict:
         "python_requirements_txt": (repo / "requirements.txt").exists(),
         "python_setup_py": (repo / "setup.py").exists(),
         "node_package_json": (repo / "package.json").exists(),
-        "dependabot_config": (repo / ".github" / "dependabot.yml").exists() or (repo / ".github" / "dependabot.yaml").exists(),
-        "renovate_config": any((repo / p).exists() for p in ("renovate.json", "renovate.json5", ".renovaterc")),
-        "_note": "actual vulnerability count needs osv-scanner / Dependabot alerts; planned as a proposal output",
+        "dependabot_config": (
+            (repo / ".github" / "dependabot.yml").exists()
+            or (repo / ".github" / "dependabot.yaml").exists()
+        ),
+        "renovate_config": any(
+            (repo / p).exists()
+            for p in ("renovate.json", "renovate.json5", ".renovaterc")
+        ),
+        "_note": (
+            "actual vulnerability count needs osv-scanner / Dependabot alerts; "
+            "planned as a proposal output"
+        ),
     }
 
 
 def audit_iac(repo: Path) -> dict:
-    """Infrastructure-as-Code surface — DORA 'deployment automation' / 'version control of all production artifacts'."""
+    """Infrastructure-as-Code surface — DORA 'deployment automation'."""
     has_dockerfile = any(p.name == "Dockerfile" for p in _walk_source(repo))
-    has_compose = any(p.name.startswith("docker-compose") or p.name.startswith("compose.") for p in _walk_source(repo))
+    has_compose = any(
+        p.name.startswith("docker-compose") or p.name.startswith("compose.")
+        for p in _walk_source(repo)
+    )
     has_terraform = any(p.suffix == ".tf" for p in _walk_source(repo))
-    has_helm = (repo / "Chart.yaml").exists() or any(p.parent.name == "templates" and p.suffix in (".yml", ".yaml") for p in _walk_source(repo))
-    has_ansible = (repo / "ansible").exists() or any(p.name in ("playbook.yml", "playbook.yaml") for p in _walk_source(repo))
+    has_helm = (repo / "Chart.yaml").exists() or any(
+        p.parent.name == "templates" and p.suffix in (".yml", ".yaml")
+        for p in _walk_source(repo)
+    )
+    has_ansible = (repo / "ansible").exists() or any(
+        p.name in ("playbook.yml", "playbook.yaml") for p in _walk_source(repo)
+    )
     has_makefile = (repo / "Makefile").exists() or (repo / "makefile").exists()
     return {
         "dockerfile_present": has_dockerfile,
@@ -303,7 +356,7 @@ def _gap_id(area: str, summary: str) -> str:
     """Deterministic short id for a gap, so proposals can reference a specific
     finding (`gap_id: ci-7a3f9b2c1d`) without depending on position in the
     sorted list — which can shift as new gaps appear at the same severity."""
-    h = hashlib.sha256(f"{area}::{summary}".encode("utf-8")).hexdigest()[:10]
+    h = hashlib.sha256(f"{area}::{summary}".encode()).hexdigest()[:10]
     return f"{area}-{h}"
 
 
@@ -324,8 +377,14 @@ def derive_gaps(metrics: dict) -> list[dict]:
             "severity": "high",
             "frameworks": ["DORA: Continuous Integration", "DORA: Deployment Automation"],
             "summary": "No CI workflows detected",
-            "detail": "No .github/workflows/*.yml and no other CI config — there is no automated test/lint/security signal on PRs.",
-            "proposed_action": "Adopt GitHub Actions; minimal first workflow runs the existing make test targets and a lint pass on PRs.",
+            "detail": (
+                "No .github/workflows/*.yml and no other CI config — "
+                "there is no automated test/lint/security signal on PRs."
+            ),
+            "proposed_action": (
+                "Adopt GitHub Actions; minimal first workflow runs the existing "
+                "make test targets and a lint pass on PRs."
+            ),
         })
 
     if not docs["license_present"]:
@@ -334,8 +393,14 @@ def derive_gaps(metrics: dict) -> list[dict]:
             "severity": "medium",
             "frameworks": ["NIST SSDF: PO.1 — define the security & compliance requirements"],
             "summary": "No LICENSE file",
-            "detail": "Repo has no LICENSE/LICENSE.md/LICENSE.txt — legally ambiguous reuse posture.",
-            "proposed_action": "Add an explicit LICENSE (Apache-2.0 / MIT / proprietary, per the project's intent).",
+            "detail": (
+                "Repo has no LICENSE/LICENSE.md/LICENSE.txt — "
+                "legally ambiguous reuse posture."
+            ),
+            "proposed_action": (
+                "Add an explicit LICENSE (Apache-2.0 / MIT / proprietary, "
+                "per the project's intent)."
+            ),
         })
 
     if not docs["security_md_present"]:
@@ -344,7 +409,10 @@ def derive_gaps(metrics: dict) -> list[dict]:
             "severity": "medium",
             "frameworks": ["OpenSSF Scorecard: Security-Policy", "NIST SSDF: PO.1"],
             "summary": "No SECURITY.md",
-            "detail": "No vulnerability-disclosure policy — researchers have nowhere documented to report findings.",
+            "detail": (
+                "No vulnerability-disclosure policy — researchers have "
+                "nowhere documented to report findings."
+            ),
             "proposed_action": "Add SECURITY.md naming a reporting channel and a response SLA.",
         })
 
@@ -355,17 +423,28 @@ def derive_gaps(metrics: dict) -> list[dict]:
             "frameworks": ["DORA: Streamlining change approval"],
             "summary": "No CODEOWNERS",
             "detail": "Review-routing relies on humans remembering who to ask.",
-            "proposed_action": "Add CODEOWNERS once CI is in place and required-reviews can enforce it.",
+            "proposed_action": (
+                "Add CODEOWNERS once CI is in place and required-reviews can enforce it."
+            ),
         })
 
     if not sec["gitleaks_config_present"]:
         gaps.append({
             "area": "security",
             "severity": "medium",
-            "frameworks": ["DORA: Shift-left security", "OpenSSF Scorecard: Token-Permissions / Pinned-Dependencies"],
+            "frameworks": [
+                "DORA: Shift-left security",
+                "OpenSSF Scorecard: Token-Permissions / Pinned-Dependencies",
+            ],
             "summary": "No secrets scanner configured",
-            "detail": "V0 audit's regex sweep is a placeholder; a real scanner (gitleaks/trufflehog) must run pre-commit and in CI.",
-            "proposed_action": "Adopt gitleaks; add a pre-commit hook and a CI job. Tune .gitleaks.toml for this repo's patterns.",
+            "detail": (
+                "V0 audit's regex sweep is a placeholder; a real scanner "
+                "(gitleaks/trufflehog) must run pre-commit and in CI."
+            ),
+            "proposed_action": (
+                "Adopt gitleaks; add a pre-commit hook and a CI job. "
+                "Tune .gitleaks.toml for this repo's patterns."
+            ),
         })
 
     if sec["regex_secret_finding_count"] > 0:
@@ -373,9 +452,18 @@ def derive_gaps(metrics: dict) -> list[dict]:
             "area": "security",
             "severity": "high",
             "frameworks": ["DORA: Shift-left security"],
-            "summary": f"V0 regex sweep found {sec['regex_secret_finding_count']} possible secret(s)",
-            "detail": "These are likely false positives (the V0 patterns are conservative) but must be triaged.",
-            "proposed_action": "Triage the regex hits; adopt gitleaks for proper detection (see secrets-scanner gap).",
+            "summary": (
+                f"V0 regex sweep found {sec['regex_secret_finding_count']} "
+                "possible secret(s)"
+            ),
+            "detail": (
+                "These are likely false positives (the V0 patterns are "
+                "conservative) but must be triaged."
+            ),
+            "proposed_action": (
+                "Triage the regex hits; adopt gitleaks for proper detection "
+                "(see secrets-scanner gap)."
+            ),
         })
 
     if not sec["openssf_scorecard_present"]:
@@ -392,10 +480,18 @@ def derive_gaps(metrics: dict) -> list[dict]:
         gaps.append({
             "area": "supply_chain",
             "severity": "medium",
-            "frameworks": ["DORA: Shift-left security", "OpenSSF Scorecard: Dependency-Update-Tool"],
+            "frameworks": [
+                "DORA: Shift-left security",
+                "OpenSSF Scorecard: Dependency-Update-Tool",
+            ],
             "summary": "No dependency-update tool configured",
-            "detail": "No Dependabot or Renovate config — vulnerable transitive updates won't be flagged automatically.",
-            "proposed_action": "Enable Dependabot (free for GitHub repos); grouping rules to avoid noise.",
+            "detail": (
+                "No Dependabot or Renovate config — vulnerable transitive "
+                "updates won't be flagged automatically."
+            ),
+            "proposed_action": (
+                "Enable Dependabot (free for GitHub repos); grouping rules to avoid noise."
+            ),
         })
 
     if not tests["coverage_measured"]:
@@ -404,8 +500,14 @@ def derive_gaps(metrics: dict) -> list[dict]:
             "severity": "medium",
             "frameworks": ["DORA: Test automation"],
             "summary": "No test-coverage measurement",
-            "detail": "V0 audit only counts test files; no coverage % is produced, so we can't see drift.",
-            "proposed_action": "Add coverage.py to the pytest runs in CI; publish a per-PR summary; track median over time.",
+            "detail": (
+                "V0 audit only counts test files; no coverage % is produced, "
+                "so we can't see drift."
+            ),
+            "proposed_action": (
+                "Add coverage.py to the pytest runs in CI; publish a per-PR "
+                "summary; track median over time."
+            ),
         })
 
     # Stable order by severity then area, so audit diffs in PRs are readable.
@@ -448,9 +550,13 @@ def run(repo: Path, name: str) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Repo health auditor (DORA/SPACE/OpenSSF-anchored).")
+    ap = argparse.ArgumentParser(
+        description="Repo health auditor (DORA/SPACE/OpenSSF-anchored).",
+    )
     ap.add_argument("--repo", required=True, help="path to the repo to audit")
-    ap.add_argument("--name", required=True, help="short logical name (used in history path + JSON)")
+    ap.add_argument(
+        "--name", required=True, help="short logical name (used in history path + JSON)",
+    )
     ap.add_argument("--history", help="append the snapshot to this JSONL history file")
     ap.add_argument("--gaps", action="store_true", help="emit only the ranked gaps")
     args = ap.parse_args(argv)

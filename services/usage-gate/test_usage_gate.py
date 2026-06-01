@@ -13,6 +13,7 @@ asserts the gate now dispatches.
 import json
 import os
 import tempfile
+import time as _time
 
 import usage_gate as ug
 
@@ -83,7 +84,6 @@ def test_high_status_allowed_overrides_high_number_is_not_assumed():
 # --------------------------------------------------------------------------- #
 # Pacing (per-window) decision path — the nightly catch-up model
 # --------------------------------------------------------------------------- #
-import time as _time
 
 # Aggressive default: weekly linear 0→100, 5h flat 95.
 PACING = {
@@ -197,8 +197,8 @@ def _creds_file(tmp, *, refresh="rt-old", access="at-old", extra=None):
 def test_refresh_updates_credentials_atomically():
     with tempfile.TemporaryDirectory() as tmp:
         path = _creds_file(tmp)
-        poster = lambda body: {"access_token": "at-new", "refresh_token": "rt-new",
-                               "expires_in": 3600}
+        def poster(body):
+            return {"access_token": "at-new", "refresh_token": "rt-new", "expires_in": 3600}
         res = ug.refresh_access_token(credentials_path=path, poster=poster, now=1_000_000.0)
         assert res["refreshed"]
         doc = json.load(open(path))["claudeAiOauth"]

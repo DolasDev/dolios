@@ -46,7 +46,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 API_BASE = "https://api.anthropic.com"
@@ -79,7 +79,9 @@ def load_oauth() -> dict:
         with open(CREDENTIALS_PATH) as fh:
             return json.load(fh)["claudeAiOauth"]
     except (OSError, KeyError, json.JSONDecodeError) as exc:
-        raise UsageError(f"cannot read OAuth credentials at {CREDENTIALS_PATH}: {exc}")
+        raise UsageError(
+            f"cannot read OAuth credentials at {CREDENTIALS_PATH}: {exc}"
+        ) from exc
 
 
 def token_expired(oauth: dict, buffer_s: int = EXPIRY_BUFFER_S) -> bool:
@@ -99,9 +101,9 @@ def _post_oauth_token(body: dict, *, timeout: int = 30) -> dict:
             return json.load(resp)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:300]
-        raise UsageError(f"token refresh HTTP {exc.code}: {detail}")
+        raise UsageError(f"token refresh HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
-        raise UsageError(f"network error during token refresh: {exc}")
+        raise UsageError(f"network error during token refresh: {exc}") from exc
 
 
 def refresh_access_token(
@@ -215,12 +217,16 @@ def fetch_ping_headers(token: str, *, model: str = PING_MODEL, timeout: int = 30
         # A 429 still carries the headers we want — that's a valid "rejected"
         # reading, not an error. Anything else without usable headers is fatal.
         if exc.code in (401, 403):
-            raise UsageError(f"OAuth token rejected by /v1/messages (HTTP {exc.code})")
+            raise UsageError(
+                f"OAuth token rejected by /v1/messages (HTTP {exc.code})"
+            ) from exc
         if not any("ratelimit-unified" in k.lower() for k in raw):
             detail = exc.read().decode(errors="replace")[:300]
-            raise UsageError(f"/v1/messages HTTP {exc.code}, no rate-limit headers: {detail}")
+            raise UsageError(
+                f"/v1/messages HTTP {exc.code}, no rate-limit headers: {detail}"
+            ) from exc
     except urllib.error.URLError as exc:
-        raise UsageError(f"network error reaching /v1/messages: {exc}")
+        raise UsageError(f"network error reaching /v1/messages: {exc}") from exc
 
     prefix = "anthropic-ratelimit-unified-"
     out: dict[str, str] = {}
@@ -257,7 +263,7 @@ def fetch_usage_endpoint(token: str, *, timeout: int = 30) -> dict | None:
 def _iso(epoch_s: float | None) -> str | None:
     if not epoch_s:
         return None
-    return datetime.fromtimestamp(int(epoch_s), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(int(epoch_s), tz=UTC).isoformat().replace("+00:00", "Z")
 
 
 def _window(headers: dict, name: str) -> dict:
@@ -445,8 +451,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-enrich", action="store_true", help="skip the /api/oauth/usage call")
     ap.add_argument("--auto-refresh", action="store_true",
                     help="if the token is expired, refresh it (rewrites the credentials file)")
-    ap.add_argument("--refresh", action="store_true",
-                    help="refresh the OAuth token now and exit (DESTRUCTIVE: rotates + rewrites creds)")
+    ap.add_argument(
+        "--refresh", action="store_true",
+        help="refresh the OAuth token now and exit (DESTRUCTIVE: rotates + rewrites creds)",
+    )
     ap.add_argument("--refresh-dry-run", action="store_true",
                     help="show the refresh request without sending it or touching any file")
     args = ap.parse_args(argv)

@@ -27,15 +27,14 @@ CLI:
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import datetime
 import json
 import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -67,7 +66,7 @@ class Config:
     gate_windows: dict | None = None
 
     @classmethod
-    def load(cls, path: str) -> "Config":
+    def load(cls, path: str) -> Config:
         try:
             import yaml
         except ImportError as exc:  # pragma: no cover
@@ -139,11 +138,11 @@ def _real_gh(args: list, cwd: str) -> str:
         return subprocess.run(
             ["gh", *args], cwd=cwd, check=True, capture_output=True, text=True
         ).stdout.strip()
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise GuardrailError(
             "gh CLI not on PATH — install it (https://cli.github.com) and "
             "set GH_TOKEN before retrying."
-        )
+        ) from exc
 
 
 def _real_gate_decide(max_utilization: float, windows: dict | None) -> dict:

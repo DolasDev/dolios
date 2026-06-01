@@ -124,7 +124,7 @@ below as part of the same commit, so a human reviewer sees the implementation
      privilege, OpenSSF *Token-Permissions* satisfied by construction.
    - File-only PR; no code changes outside `.github/`.
 
-- [ ] **Minimal `pyproject.toml` for ruff config + tighten the `services/`
+- [x] **Minimal `pyproject.toml` for ruff config + tighten the `services/`
    lint.**
    - Path: `pyproject.toml` (new file at repo root).
    - Only the `[tool.ruff]` section: `line-length = 100`,
