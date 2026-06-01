@@ -20,7 +20,14 @@ V1 priority order (highest first — finish what you started before opening new 
   4. **propose**   — repo has an uncovered open gap (`gap_id` not referenced by
      any active proposal). Highest-severity uncovered gap across all repos
      wins; ties broken by repo name → gap area for determinism.
-  5. **empty**     — nothing to do this tick.
+  5. **reflect**   — no successful `kind=reflect` tick in the last 7 days.
+     The meta-loop: dispatch claude to read the loop's own behavior over
+     the lookback window (tick-log, ledger, closed proposals) and distill
+     one new memory summarizing the most important cross-cutting pattern.
+     Lower priority than work-creating kinds — we'd rather make progress
+     than reflect on the absence of progress. Only fires when nothing else
+     does AND it's been a week since the last one.
+  6. **empty**     — nothing to do this tick.
 
 Chunk state lives in the proposal markdown itself (`- [ ]` / `- [x]` checkboxes
 in the `## Intervention` section, parsed by chunks.py). The dispatcher flips
@@ -70,6 +77,10 @@ MAX_IMPLEMENTING_PER_REPO = 3
 ACTIVE_PROPOSAL_STATUSES = {"proposed", "approved", "implementing"}
 
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
+
+# How often kind=reflect is allowed to fire — once per week. The picker
+# walks the tick-log looking for a successful reflect within this window.
+REFLECT_INTERVAL_DAYS = 7
 
 
 def _now_ts() -> float:
@@ -295,8 +306,40 @@ def _execute_task(b: RepoBacklog, fm: dict, chunk: ch.Chunk,
     }
 
 
-def pick(backlogs: list[RepoBacklog]) -> dict:
-    """V1 priority logic. Returns a dict suitable for `json.dumps`."""
+def _reflect_due(dolios_root: Path, *, days: int = REFLECT_INTERVAL_DAYS) -> bool:
+    """True iff no kind=reflect tick (succeeded OR dispatched) within the
+    lookback window. Reads .dolios/tick-log.jsonl bottom-up since recent
+    entries are what we care about; bounded by `days` so we don't scan
+    the whole history on every tick."""
+    log_path = dolios_root / ".dolios" / "tick-log.jsonl"
+    if not log_path.exists():
+        return True
+    cutoff = _now_ts() - days * 86400
+    with log_path.open() as fh:
+        lines = fh.readlines()
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = rec.get("ts", 0)
+        if ts < cutoff:
+            return True  # older than cutoff; everything before is older too
+        if rec.get("kind") == "reflect":
+            return False  # one fired within the window
+    return True  # no reflect entries at all
+
+
+def pick(backlogs: list[RepoBacklog], *,
+         dolios_root: Path | None = None) -> dict:
+    """V1 priority logic. Returns a dict suitable for `json.dumps`.
+
+    `dolios_root` is used only for the reflect-due check; omit it (or pass
+    None) to skip the reflect kind entirely — useful in tests that don't
+    seed a tick-log."""
 
     # 1. Audit-due. Deterministic order by repo name.
     for b in sorted(backlogs, key=lambda x: x.name):
@@ -371,12 +414,23 @@ def pick(backlogs: list[RepoBacklog]) -> dict:
                           f"covering proposal; under the 3-active cap"),
         }
 
-    # 5. Quiet tick.
+    # 5. Reflect — only if we have somewhere to check the tick-log AND it's
+    # been long enough since the last reflect. Lower priority than the
+    # work-creating kinds, but ahead of empty so a quiet week still produces
+    # a learning artifact.
+    if dolios_root is not None and _reflect_due(dolios_root):
+        return {
+            "kind": "reflect",
+            "rationale": (f"no kind=reflect tick in the last "
+                          f"{REFLECT_INTERVAL_DAYS} days; distill one memory"),
+        }
+
+    # 6. Quiet tick.
     return {
         "kind": "empty",
         "rationale": ("no stale audits; no approved proposals with pending "
                       "chunks; every open gap is covered or every repo is at "
-                      "the 3-implementing cap"),
+                      "the 3-implementing cap; no reflect overdue"),
     }
 
 
@@ -426,7 +480,7 @@ def main(argv=None) -> int:
     dolios_root = Path(args.root).resolve()
     backlogs = [build_repo_backlog(name, path, dolios_root=dolios_root)
                 for name, path in allow.items()]
-    print(json.dumps(pick(backlogs), indent=2))
+    print(json.dumps(pick(backlogs, dolios_root=dolios_root), indent=2))
     return 0
 
 

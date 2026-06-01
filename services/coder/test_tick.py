@@ -359,6 +359,43 @@ def test_remeasure_kind_dispatches_with_pre_audit_ref_from_proposal_frontmatter(
         assert "approved" in inst_arg                  # status flip mentioned
 
 
+def test_reflect_kind_dispatches_with_lookback_prompt():
+    """Reflect handler dispatches via dispatch.py free-form mode against
+    dolios with a date-stamped task_id; instructions reference reading
+    tick-log, ledger, and closed proposals."""
+    with tempfile.TemporaryDirectory() as tmp:
+        dispatch_response = json.dumps({
+            "ok": True,
+            "record": {
+                "pr_url": "https://example/pr/77",
+                "cost_usd": 1.8,
+                "branch": "auto/coder/reflect-2026-06-01",
+            },
+        })
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "backlog.py":       (0, json.dumps({
+                "kind": "reflect",
+                "rationale": "no kind=reflect tick in the last 7 days; "
+                             "distill one memory",
+            }), ""),
+            "reflect-": (0, dispatch_response, ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "reflect"
+        assert record["dispatch_rc"] == 0
+        assert record["pr_url"] == "https://example/pr/77"
+        # task_id is date-stamped — won't match the hardcoded fixture date
+        # exactly since _make uses fixed `now`, but it has the prefix.
+        assert record["task_id"].startswith("reflect-")
+        disp_call = tr._runner.calls[-1]
+        inst_arg = disp_call[disp_call.index("--instructions") + 1]
+        # Reflect prompt references all four reading sources.
+        for needle in (".dolios/tick-log.jsonl", "services/coder/.ledger.jsonl",
+                       "proposals/", ".dolios/metrics/"):
+            assert needle in inst_arg, f"reflect prompt missing: {needle!r}"
+
+
 def test_remeasure_with_missing_proposal_records_error_cleanly():
     with tempfile.TemporaryDirectory() as tmp:
         tr = _make({

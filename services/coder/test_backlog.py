@@ -353,7 +353,100 @@ def test_remeasure_beats_execute_and_propose():
 
 
 # --------------------------------------------------------------------------- #
-# 5. End-to-end via main(): writes structured stdout, exits 0
+# 5. Reflect — fires when no successful reflect tick in the lookback window
+# --------------------------------------------------------------------------- #
+def _seed_tick_log(root, rows):
+    p = root / ".dolios" / "tick-log.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+
+def test_reflect_fires_when_no_prior_reflect_and_nothing_else_to_do():
+    """All-clean state: fresh audit, only gap is covered by a *closed*
+    proposal (so neither propose nor remeasure can fire). No reflect in
+    the log. Picker emits kind=reflect."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_audit_row(root, "dolios", audited_at=_iso_minus_days(1),
+                         gaps=[("high", "ci", "ci-aaa", "No CI")])
+        # Closed proposal: done status with done date → doesn't cover gaps for
+        # propose, doesn't trigger remeasure, doesn't trigger execute.
+        _write_proposal(root, "dolios", "closed", status="done",
+                        gap_ids=["ci-aaa"], done="2026-05-30",
+                        chunks=[("c1", True)])
+        bl = b.build_repo_backlog("dolios", root / "repo", dolios_root=root)
+        d = b.pick([bl], dolios_root=root)
+        # Above-reflect kinds: status:done doesn't cover, so propose fires
+        # for ci-aaa first. To actually test reflect, the gap needs to be
+        # covered by an ACTIVE proposal, but that proposal can't have
+        # pending chunks (or execute fires) or all-done-no-done-date (or
+        # remeasure fires). So: cover with proposed status (covers via
+        # ACTIVE_PROPOSAL_STATUSES, blocks propose; no chunks → execute
+        # skips; status not approved → remeasure skips).
+        # Adjust by adding a second proposal that covers it actively.
+        _write_proposal(root, "dolios", "covering", status="proposed",
+                        gap_ids=["ci-aaa"])
+        bl = b.build_repo_backlog("dolios", root / "repo", dolios_root=root)
+        d = b.pick([bl], dolios_root=root)
+        assert d["kind"] == "reflect", d
+        assert "no kind=reflect tick in the last" in d["rationale"]
+
+
+def test_reflect_does_not_fire_when_recent_reflect_in_log():
+    """A reflect tick within the lookback window suppresses the next one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_audit_row(root, "dolios", audited_at=_iso_minus_days(1), gaps=[])
+        _seed_tick_log(root, [{
+            "ts": time.time() - 86400,    # 1 day ago
+            "kind": "reflect",
+        }])
+        bl = b.build_repo_backlog("dolios", root / "repo", dolios_root=root)
+        d = b.pick([bl], dolios_root=root)
+        assert d["kind"] == "empty"   # reflect suppressed; nothing else to do
+
+
+def test_reflect_fires_when_last_reflect_is_older_than_lookback():
+    """An old reflect entry shouldn't suppress a fresh one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_audit_row(root, "dolios", audited_at=_iso_minus_days(1), gaps=[])
+        _seed_tick_log(root, [{
+            "ts": time.time() - (b.REFLECT_INTERVAL_DAYS + 1) * 86400,
+            "kind": "reflect",
+        }])
+        bl = b.build_repo_backlog("dolios", root / "repo", dolios_root=root)
+        d = b.pick([bl], dolios_root=root)
+        assert d["kind"] == "reflect"
+
+
+def test_reflect_loses_to_work_creating_kinds():
+    """Even if reflect is due, an actual work item wins."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_audit_row(root, "dolios", audited_at=_iso_minus_days(1),
+                         gaps=[("medium", "x", "x-1", "uncovered gap")])
+        bl = b.build_repo_backlog("dolios", root / "repo", dolios_root=root)
+        d = b.pick([bl], dolios_root=root)
+        assert d["kind"] == "propose"
+        assert d["gap_id"] == "x-1"
+
+
+def test_reflect_check_skipped_when_no_dolios_root_passed():
+    """The legacy `pick([backlogs])` call shape still works — reflect is
+    just unreachable without dolios_root."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write_audit_row(root, "dolios", audited_at=_iso_minus_days(1), gaps=[])
+        bl = b.build_repo_backlog("dolios", root / "repo", dolios_root=root)
+        d = b.pick([bl])  # no dolios_root kwarg → reflect unreachable
+        assert d["kind"] == "empty"
+
+
+# --------------------------------------------------------------------------- #
+# 6. End-to-end via main(): writes structured stdout, exits 0
 # --------------------------------------------------------------------------- #
 def test_main_emits_valid_json_and_exits_zero(capsys=None):
     with tempfile.TemporaryDirectory() as tmp:
@@ -368,6 +461,8 @@ def test_main_emits_valid_json_and_exits_zero(capsys=None):
                          gaps=[("high", "ci", "ci-aaa", "No CI")])
         _write_proposal(root, "dolios", "active",
                         status="approved", gap_ids=["ci-aaa"])
+        # Seed a recent reflect so the empty path wins over reflect.
+        _seed_tick_log(root, [{"ts": time.time() - 86400, "kind": "reflect"}])
 
         # Redirect stdout in a portable way (no capsys to keep standalone runnable)
         import io

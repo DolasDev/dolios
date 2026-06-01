@@ -204,6 +204,9 @@ class TickRunner:
         elif kind == "remeasure":
             self._handle_remeasure(job, record)
 
+        elif kind == "reflect":
+            self._handle_reflect(job, record)
+
         elif kind == "error":
             record["error"] = job.get("error", "picker reported error")
             self._log(record)
@@ -213,6 +216,53 @@ class TickRunner:
         self._log(record)
         return record
 
+
+    # -- kind=reflect handler ------------------------------------------- #
+    def _handle_reflect(self, job: dict, record: dict) -> None:
+        """Periodic meta-loop: dispatch claude to read the loop's own
+        behavior over the lookback window (tick-log + ledger + closed
+        proposals + audit history) and distill ONE new memory summarizing
+        the most important cross-cutting pattern. Lands as a PR like
+        everything else; humans review the lesson before it sticks."""
+        sys.path.insert(0, str(self.root / "services" / "coder"))
+        try:
+            import prompts as _prompts
+        except ImportError as exc:
+            record["error"] = f"cannot import prompts module: {exc}"
+            return
+
+        today = time.strftime("%Y-%m-%d", time.gmtime(self._now()))
+        instructions = _prompts.compose_reflect_instructions(
+            root=self.root, days=7, today=today,
+        )
+        # Reflect dispatches against the dolios repo (where the loop's own
+        # infrastructure — memories/, skills/, hooks/ — lives). task_id is
+        # date-stamped so each week's reflect gets a distinct branch +
+        # idempotent re-runs within the same day.
+        task_id = f"reflect-{today}"
+        ex_rc, ex_out, ex_err = self._runner(
+            [
+                "python3", "services/coder/dispatch.py",
+                "--repo",         "dolios",
+                "--task",         task_id,
+                "--instructions", instructions,
+            ],
+            self.root,
+        )
+        record["dispatch_rc"] = ex_rc
+        record["task_id"] = task_id
+        try:
+            disp = json.loads(ex_out)
+        except (json.JSONDecodeError, ValueError):
+            record["dispatch_error"] = (ex_out or ex_err)[-400:]
+            return
+        if disp.get("ok"):
+            inner = disp.get("record", {})
+            record["pr_url"]   = inner.get("pr_url")
+            record["cost_usd"] = inner.get("cost_usd")
+            record["branch"]   = inner.get("branch")
+        else:
+            record["dispatch_error"] = disp.get("error", "")
 
     # -- kind=remeasure handler ----------------------------------------- #
     def _handle_remeasure(self, job: dict, record: dict) -> None:
