@@ -17,7 +17,7 @@ SWITCH := ./infra/gpu-stack.sh
         coder-preflight coder-test \
         audit audit-gaps audit-test \
         backlog-next backlog-test chunks-test \
-        tick tick-test
+        tick tick-test install-coder-cron
 
 up:
 	docker compose up -d
@@ -116,3 +116,14 @@ tick:
 
 tick-test:
 	@cd services/coder && python3 test_tick.py
+
+# Install the cron wrapper at the path `hermes cron --script` expects
+# (~/.hermes/scripts/), then register the schedule. One-time setup per host.
+install-coder-cron:
+	@mkdir -p $(HOME)/.hermes/scripts
+	@install -m 0755 infra/hermes/scripts/dolios-tick.sh $(HOME)/.hermes/scripts/dolios-tick.sh
+	@echo "Installed wrapper at $(HOME)/.hermes/scripts/dolios-tick.sh"
+	@echo "Now register the cron from inside the container:"
+	@echo "  docker compose exec --user hermes hermes-autonomous-coder hermes -p autonomous-coder cron create \\"
+	@echo "    '0,30 3-11 * * *' --no-agent --script dolios-tick.sh \\"
+	@echo "    --name dolios-coder-loop --workdir /opt/data/repos/dolios"
