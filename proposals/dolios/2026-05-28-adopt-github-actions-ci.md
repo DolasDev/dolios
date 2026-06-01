@@ -103,7 +103,7 @@ that one dispatcher run can produce it. Each execution PR flips its checkbox
 below as part of the same commit, so a human reviewer sees the implementation
 *and* the chunk-done state change in one diff.
 
-- [ ] **`.github/workflows/ci.yml` — the minimal first workflow.**
+- [x] **`.github/workflows/ci.yml` — the minimal first workflow.**
    - Path: `.github/workflows/ci.yml`.
    - Triggers: `pull_request` against `main`; `push` to `main`.
    - Concurrency group: `ci-${{ github.ref }}` with `cancel-in-progress: true`
