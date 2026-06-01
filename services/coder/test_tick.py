@@ -215,21 +215,93 @@ def test_execute_dispatch_error_lands_in_the_log_not_a_crash():
 # --------------------------------------------------------------------------- #
 # Deferred kinds (propose / remeasure) — V1 logs + exits clean
 # --------------------------------------------------------------------------- #
-def test_propose_kind_is_logged_and_exits_clean_pending_implementation():
+def test_propose_kind_dispatches_with_context_loaded():
+    """Propose path: load gap from audit history, compose rich instructions
+    with memories + outcomes context, dispatch via dispatch.py free-form
+    mode. The instructions string passed to dispatch must carry the gap_id,
+    the audit ref, and any memories on disk."""
     with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # Seed a minimal audit history with the gap the picker will reference.
+        (root / ".dolios" / "metrics" / "dolios").mkdir(parents=True)
+        (root / ".dolios" / "metrics" / "dolios" / "history.jsonl").write_text(
+            json.dumps({
+                "schema_version": 1,
+                "audited_at": "2026-06-01T12:00:00Z",
+                "repo": "dolios",
+                "gaps": [{
+                    "area": "supply_chain", "severity": "medium",
+                    "gap_id": "supply_chain-abc123",
+                    "summary": "No dependency-update tool configured",
+                    "frameworks": ["DORA: Shift-left security"],
+                    "proposed_action": "Enable Dependabot",
+                }],
+            }) + "\n"
+        )
+        # Seed a memory so we can assert it gets injected into the prompt.
+        (root / "infra" / "hermes" / "memories").mkdir(parents=True)
+        (root / "infra" / "hermes" / "memories" / "0001-test-lesson.md").write_text(
+            "# Test lesson\n\nDispatcher must always flip the box itself.\n"
+        )
+
+        # Required for the dispatch.py invocation; we just match on the flag.
+        dispatch_response = json.dumps({
+            "ok": True,
+            "record": {
+                "pr_url": "https://example/pr/42",
+                "cost_usd": 2.5,
+                "branch": "auto/coder/propose-supply_chain-abc123",
+            },
+        })
         tr = _make({
             "--preflight-only": _preflight_ok(),
             "backlog.py":       (0, json.dumps({
                 "kind": "propose",
                 "repo": "dolios",
-                "gap_id": "ci-aaa",
-                "gap_summary": "No CI",
+                "gap_id": "supply_chain-abc123",
+                "gap_summary": "No dependency-update tool configured",
+                "gap_severity": "medium",
+                "frameworks": ["DORA: Shift-left security"],
+                "rationale": "open gap",
+            }), ""),
+            "propose-supply_chain-abc123": (0, dispatch_response, ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "propose"
+        assert record["dispatch_rc"] == 0
+        assert record["pr_url"] == "https://example/pr/42"
+        assert record["task_id"] == "propose-supply_chain-abc123"
+        # Inspect the dispatch invocation — assert the propose prompt
+        # got the gap details + memory body + audit-line citation.
+        disp_call = tr._runner.calls[-1]
+        assert "--task" in disp_call
+        # The instructions arg is right after --instructions.
+        inst_arg = disp_call[disp_call.index("--instructions") + 1]
+        assert "supply_chain-abc123" in inst_arg
+        assert "No dependency-update tool configured" in inst_arg
+        assert "Enable Dependabot" in inst_arg          # auditor's proposed_action
+        assert "Dispatcher must always flip the box itself." in inst_arg   # memory
+        assert "history.jsonl#L1@2026-06-01T12:00:00Z" in inst_arg          # audit ref
+
+
+def test_propose_with_missing_audit_history_records_error_cleanly():
+    """If a repo has never been audited, the propose path can't form a
+    citation. It must NOT crash — record an error and exit."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "backlog.py":       (0, json.dumps({
+                "kind": "propose",
+                "repo": "freshrepo",
+                "gap_id": "ci-xyz",
                 "rationale": "open gap",
             }), ""),
         }, tmp)
         record = tr.run_tick()
         assert record["kind"] == "propose"
-        assert "needs_implementation" in record["deferred"] or "not yet auto-implemented" in record["deferred"]
+        assert "no audit history" in record["error"].lower()
+        # No dispatch call should have happened.
+        assert not any("--task" in c for c in tr._runner.calls)
 
 
 def test_remeasure_kind_same_deferred_path():

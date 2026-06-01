@@ -17,7 +17,7 @@ SWITCH := ./infra/gpu-stack.sh
         coder-preflight coder-test \
         audit audit-gaps audit-test \
         backlog-next backlog-test chunks-test \
-        tick tick-test install-coder-cron
+        tick tick-test prompts-test install-coder-cron
 
 up:
 	docker compose up -d
@@ -116,6 +116,9 @@ tick:
 
 tick-test:
 	@cd services/coder && python3 test_tick.py
+
+prompts-test:
+	@cd services/coder && python3 test_prompts.py
 
 # Install the cron wrapper at the path `hermes cron --script` expects
 # (~/.hermes/scripts/), then register the schedule. One-time setup per host.

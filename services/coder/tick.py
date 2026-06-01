@@ -180,13 +180,13 @@ class TickRunner:
                 else:
                     record["dispatch_error"] = disp.get("error")
 
-        elif kind in ("propose", "remeasure"):
-            # V1 hasn't built the agent-driven path for these. The tick still
-            # exits clean so the cron stays alive; next tick will hit the same
-            # case until the picker advances or the supervisor handles it
-            # manually.
+        elif kind == "propose":
+            self._handle_propose(job, record)
+
+        elif kind == "remeasure":
+            # V1 (still deferred — see next commit).
             record["deferred"] = (
-                f"kind={kind} not yet auto-implemented; see services/coder/README.md"
+                "kind=remeasure not yet auto-implemented; see services/coder/README.md"
             )
 
         elif kind == "error":
@@ -197,6 +197,84 @@ class TickRunner:
         record["duration_seconds"] = round(self._now() - start, 2)
         self._log(record)
         return record
+
+
+    # -- kind=propose handler ------------------------------------------- #
+    def _handle_propose(self, job: dict, record: dict) -> None:
+        """Compose a rich proposal-generation prompt from versioned learning
+        artifacts (memories, recent outcomes, skills) and free-form-dispatch
+        it. The dispatcher handles branch / commit / push / PR; claude writes
+        the proposal markdown into the work branch."""
+        # Lazy import — keeps the picker/empty/audit/execute paths free of
+        # this dependency until they actually need it.
+        sys.path.insert(0, str(self.root / "services" / "coder"))
+        try:
+            import prompts as _prompts
+        except ImportError as exc:
+            record["error"] = f"cannot import prompts module: {exc}"
+            return
+
+        repo = job.get("repo")
+        gap_id = job.get("gap_id")
+        if not (repo and gap_id):
+            record["error"] = f"propose job missing repo or gap_id: {job}"
+            return
+
+        # Load the latest audit row for the repo + the specific gap by id.
+        history_path = (self.root / ".dolios" / "metrics" / repo /
+                        "history.jsonl")
+        if not history_path.exists():
+            record["error"] = f"no audit history at {history_path}"
+            return
+        rows = [json.loads(line) for line in history_path.read_text().splitlines()
+                if line.strip()]
+        if not rows:
+            record["error"] = "audit history file is empty"
+            return
+        audit_row = rows[-1]
+        gap = _prompts.find_gap(audit_row, gap_id)
+        if not gap:
+            record["error"] = f"gap_id {gap_id} not found in latest audit row"
+            return
+
+        audit_ref = (
+            f".dolios/metrics/{repo}/history.jsonl"
+            f"#L{len(rows)}@{audit_row['audited_at']}"
+        )
+        today = time.strftime("%Y-%m-%d", time.gmtime(self._now()))
+
+        instructions = _prompts.compose_propose_instructions(
+            root=self.root, repo=repo, gap=gap,
+            audit_ref=audit_ref, today=today,
+        )
+
+        # task_id forms a deterministic branch name auto/coder/propose-<gap_id>;
+        # the dispatcher's gh idempotency precheck will refuse if a PR for the
+        # same gap is already open.
+        task_id = f"propose-{gap_id}"
+        ex_rc, ex_out, ex_err = self._runner(
+            [
+                "python3", "services/coder/dispatch.py",
+                "--repo",         repo,
+                "--task",         task_id,
+                "--instructions", instructions,
+            ],
+            self.root,
+        )
+        record["dispatch_rc"] = ex_rc
+        record["task_id"] = task_id
+        try:
+            disp = json.loads(ex_out)
+        except (json.JSONDecodeError, ValueError):
+            record["dispatch_error"] = (ex_out or ex_err)[-400:]
+            return
+        if disp.get("ok"):
+            inner = disp.get("record", {})
+            record["pr_url"]   = inner.get("pr_url")
+            record["cost_usd"] = inner.get("cost_usd")
+            record["branch"]   = inner.get("branch")
+        else:
+            record["dispatch_error"] = disp.get("error", "")
 
 
 # --------------------------------------------------------------------------- #
