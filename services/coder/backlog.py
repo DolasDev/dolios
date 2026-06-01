@@ -438,11 +438,22 @@ def pick(backlogs: list[RepoBacklog], *,
 # CLI
 # --------------------------------------------------------------------------- #
 def _load_allowlist(config_path: Path) -> dict[str, Path]:
+    """Expand ${VAR} references the same way dispatch.Config.load does, so the
+    picker's `repo_path` output displays the resolved path (and matches what
+    the dispatcher will resolve to a moment later). Missing vars are left
+    literal — same loud-failure semantics as Config.load."""
     try:
         import yaml
     except ImportError as exc:
         raise RuntimeError("pyyaml is required to load coder.yaml") from exc
-    raw = yaml.safe_load(config_path.read_text()) or {}
+    import re as _re
+    text = config_path.read_text()
+    text = _re.sub(
+        r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+        lambda m: os.environ.get(m.group(1), m.group(0)),
+        text,
+    )
+    raw = yaml.safe_load(text) or {}
     return {name: Path(p) for name, p in (raw.get("allowlist") or {}).items()}
 
 
