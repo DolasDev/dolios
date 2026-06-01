@@ -30,7 +30,14 @@ agent:
 # Guardrail: require human approval rather than acting unattended until the
 # Phase 3 guardrails (branch+PR, allowlist, budget) are in place.
 approvals:
-  mode: "manual"
+  # Flipped from "manual" to "auto" on 2026-06-01 after chunks 1+2 of the CI
+  # proposal landed cleanly via the host-driven dispatch. The cron loop's
+  # safety still rests on the layered controls below the supervisor model:
+  # gate pacing, chunk-mode dispatcher guardrails (allowlist, branch off main,
+  # PR-not-merge, deterministic branch + gh idempotency, atomic box flip),
+  # and the human review on each opened PR. The supervisor itself only
+  # invokes tick.py per the cron prompt — no shell composition.
+  mode: "auto"
 
 terminal:
   backend: "local"
@@ -48,23 +55,23 @@ terminal:
 # The pacing math (linear weekly target = t·100%) lives in coder.yaml's
 # `gate.windows`; the dispatcher's preflight returns `binding_headroom_pct` so
 # the supervisor knows when it's at-pace and should exit early.
-# cron:
-#   coder_loop:
-#     schedule: "0,30 3-11 * * *"
-#     prompt: >
-#       Run `python3 /opt/data/repos/dolios/services/coder/tick.py` from
-#       `/opt/data/repos/dolios`. The script is the deterministic orchestrator:
-#       gate preflight → backlog.py → switch on kind → invoke the right worker
-#       (auditor / dispatcher). It writes one JSON record to stdout and
-#       appends one row to `.dolios/tick-log.jsonl`.
-#
-#       Read the JSON it printed. Briefly report:
-#         - the `kind` (audit / execute / remeasure / propose / empty / hold)
-#         - the `rationale`
-#         - if `kind == execute`: the `pr_url` and `cost_usd`
-#         - if `kind == hold`: the `gate_reason` and `binding_window`
-#         - if any `*_error` field is set: the error verbatim
-#
-#       Do NOT run any other commands. Do NOT modify the repo or any config.
-#       The schedule fires again in 30 minutes — persistent catch-up across
-#       5h-window refills is the schedule's job, not yours. One tick per fire.
+cron:
+  coder_loop:
+    schedule: "0,30 3-11 * * *"
+    prompt: >
+      Run `python3 /opt/data/repos/dolios/services/coder/tick.py` from
+      `/opt/data/repos/dolios`. The script is the deterministic orchestrator:
+      gate preflight → backlog.py → switch on kind → invoke the right worker
+      (auditor / dispatcher). It writes one JSON record to stdout and
+      appends one row to `.dolios/tick-log.jsonl`.
+
+      Read the JSON it printed. Briefly report:
+        - the `kind` (audit / execute / remeasure / propose / empty / hold)
+        - the `rationale`
+        - if `kind == execute`: the `pr_url` and `cost_usd`
+        - if `kind == hold`: the `gate_reason` and `binding_window`
+        - if any `*_error` field is set: the error verbatim
+
+      Do NOT run any other commands. Do NOT modify the repo or any config.
+      The schedule fires again in 30 minutes — persistent catch-up across
+      5h-window refills is the schedule's job, not yours. One tick per fire.
