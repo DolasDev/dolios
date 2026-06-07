@@ -43,6 +43,52 @@ DOLIOS_ROOT = HERE.parent.parent  # services/coder/ → dolios/
 DEFAULT_LOG = DOLIOS_ROOT / ".dolios" / "tick-log.jsonl"
 
 
+def _review_and_act(pr_url: str | None, repo_path: Path, record: dict,
+                    *, runner=None) -> None:
+    """After a PR-opening dispatch succeeds, run the auto-reviewer and act:
+    approve → enable gh auto-merge; reject → close with reasoning; abstain/
+    request_changes → leave open. Records every step into the tick record
+    so behavior is reviewable in tick-log over time.
+
+    `runner` is the same subprocess-runner injected into the TickRunner —
+    threading it down to the reviewer keeps the side-effect surface unified
+    and lets tick tests mock the reviewer's gh/claude calls without setting
+    up a separate fake."""
+    if not pr_url:
+        return
+    sys.path.insert(0, str(repo_path / "services" / "coder"))
+    try:
+        import reviewer as _rv
+    except ImportError as exc:
+        record["review_error"] = f"cannot import reviewer module: {exc}"
+        return
+
+    rev = _rv.review_pr(pr_url, repo_path, runner=runner)
+    record["review_decision"]  = rev.get("decision")
+    record["review_reasoning"] = rev.get("reasoning")
+    record["review_cost_usd"]  = rev.get("cost_usd")
+
+    decision = rev.get("decision")
+    if decision == "approve":
+        merge_res = _rv.enable_auto_merge(pr_url, repo_path, runner=runner)
+        record["merge_queued"] = bool(merge_res.get("queued"))
+        if not merge_res.get("ok"):
+            record["merge_error"] = merge_res.get("error", "")
+    elif decision == "reject":
+        comment = (
+            f"Auto-reviewer rejected this PR:\n\n"
+            f"{rev.get('reasoning', '(no reasoning)')}\n\n"
+            f"_Closed automatically — the picker may re-attempt this task on a "
+            f"future tick._"
+        )
+        close_res = _rv.close_pr(pr_url, repo_path, comment, runner=runner)
+        record["pr_closed"] = bool(close_res.get("closed"))
+        if not close_res.get("ok"):
+            record["close_error"] = close_res.get("error", "")
+    # For abstain / request_changes: leave the PR open. Humans can review,
+    # or a future tick may re-review after rebase / CI signal.
+
+
 def _extract_frontmatter_field(markdown_text: str, key: str) -> str | None:
     """Quick-and-dirty YAML frontmatter field extractor — no pyyaml needed.
     Returns the value of `key:` in the first `---`-delimited block at the top
@@ -195,6 +241,8 @@ class TickRunner:
                     record["cost_usd"]      = inner.get("cost_usd")
                     record["chunk_flipped"] = inner.get("chunk_flipped")
                     record["branch"]        = inner.get("branch")
+                    _review_and_act(record.get("pr_url"), self.root, record,
+                            runner=self._runner)
                 else:
                     record["dispatch_error"] = disp.get("error")
 
@@ -261,6 +309,8 @@ class TickRunner:
             record["pr_url"]   = inner.get("pr_url")
             record["cost_usd"] = inner.get("cost_usd")
             record["branch"]   = inner.get("branch")
+            _review_and_act(record.get("pr_url"), self.root, record,
+                            runner=self._runner)
         else:
             record["dispatch_error"] = disp.get("error", "")
 
@@ -324,6 +374,8 @@ class TickRunner:
             record["pr_url"]   = inner.get("pr_url")
             record["cost_usd"] = inner.get("cost_usd")
             record["branch"]   = inner.get("branch")
+            _review_and_act(record.get("pr_url"), self.root, record,
+                            runner=self._runner)
         else:
             record["dispatch_error"] = disp.get("error", "")
 
@@ -401,6 +453,8 @@ class TickRunner:
             record["pr_url"]   = inner.get("pr_url")
             record["cost_usd"] = inner.get("cost_usd")
             record["branch"]   = inner.get("branch")
+            _review_and_act(record.get("pr_url"), self.root, record,
+                            runner=self._runner)
         else:
             record["dispatch_error"] = disp.get("error", "")
 

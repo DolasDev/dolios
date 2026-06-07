@@ -27,8 +27,12 @@ class FakeRunner:
 
     def __call__(self, cmd, cwd):
         self.calls.append(cmd)
+        joined = " ".join(str(c) for c in cmd)
         for needle, resp in self.responses.items():
-            if any(needle in arg for arg in cmd):
+            # Match either as a substring of the joined command (works for
+            # multi-word fragments like "pr diff") or as a substring of any
+            # individual arg.
+            if needle in joined or any(needle in arg for arg in cmd):
                 return resp
         return 0, "", ""
 
@@ -174,13 +178,109 @@ def test_execute_kind_invokes_dispatch_with_chunk_args():
         assert record["cost_usd"] == 1.23
         assert record["chunk_flipped"] is True
         # Verify the dispatch call actually carried the chunk args through.
-        disp_call = tr._runner.calls[-1]
-        assert "--proposal-path" in disp_call
+        # (Find the dispatch call by --proposal-path; the reviewer's gh/claude
+        # calls also run after the dispatch but don't carry that flag.)
+        disp_call = next(c for c in tr._runner.calls if "--proposal-path" in c)
         assert "proposals/dolios/p1.md" in disp_call
         assert "--chunk-index" in disp_call
         assert "2" in disp_call
         # Multi-line instructions pass through Python argv (no shell escaping).
         assert "multi-line\ninstructions\nhere" in disp_call
+
+
+def test_review_approves_and_queues_auto_merge_after_successful_execute():
+    """After execute opens a PR successfully, the reviewer fires; on
+    approve, gh pr merge --auto --squash is queued. Tick record carries
+    decision + reasoning + review_cost."""
+    job = {
+        "kind": "execute",
+        "repo": "dolios",
+        "proposal_id": "dolios/p1",
+        "proposal_path": "proposals/dolios/p1.md",
+        "chunk_index": 1,
+        "task_id": "dolios-p1-chunk-1",
+        "instructions": "do it",
+        "rationale": "",
+    }
+    dispatch_response = json.dumps({
+        "ok": True,
+        "record": {"pr_url": "https://github.com/x/y/pull/42",
+                   "cost_usd": 0.6, "chunk_flipped": True,
+                   "branch": "auto/coder/dolios-p1-chunk-1"},
+    })
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "backlog.py":       (0, json.dumps(job), ""),
+            "--chunk-index":    (0, dispatch_response, ""),
+            # Reviewer responses:
+            "pr diff":          (0, "--- a\n+++ b\n+line\n", ""),
+            "pr view":          (0, json.dumps({"title": "x"}), ""),
+            # claude's review verdict:
+            "claude":           (0, json.dumps({
+                "result": ('Looks scoped to chunk 1.\n\n'
+                           '{"decision": "approve", "reasoning": "scope ok"}'),
+                "total_cost_usd": 0.25,
+            }), ""),
+            "pr merge":         (0, "✓ queued", ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "execute"
+        assert record["pr_url"] == "https://github.com/x/y/pull/42"
+        assert record["review_decision"] == "approve"
+        assert record["review_reasoning"] == "scope ok"
+        assert record["review_cost_usd"] == 0.25
+        assert record["merge_queued"] is True
+        # Order matters: the merge call must come AFTER the dispatch
+        # AND the review.
+        cmds = tr._runner.calls
+        merge_idx = next(i for i, c in enumerate(cmds) if "merge" in " ".join(c))
+        diff_idx  = next(i for i, c in enumerate(cmds) if "pr diff" in " ".join(c))
+        assert diff_idx < merge_idx
+
+
+def test_review_rejects_and_closes_pr_with_reasoning_comment():
+    """Reject path: the PR gets closed via gh, with the reviewer's
+    reasoning posted as a comment. No auto-merge call."""
+    job = {
+        "kind": "execute",
+        "repo": "dolios",
+        "proposal_id": "dolios/p1",
+        "proposal_path": "proposals/dolios/p1.md",
+        "chunk_index": 1,
+        "task_id": "dolios-p1-chunk-1",
+        "instructions": "x",
+        "rationale": "",
+    }
+    dispatch_response = json.dumps({
+        "ok": True,
+        "record": {"pr_url": "https://github.com/x/y/pull/9",
+                   "cost_usd": 0.4, "chunk_flipped": True,
+                   "branch": "auto/coder/dolios-p1-chunk-1"},
+    })
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "backlog.py":       (0, json.dumps(job), ""),
+            "--chunk-index":    (0, dispatch_response, ""),
+            "pr diff":          (0, "diff", ""),
+            "pr view":          (0, "{}", ""),
+            "claude":           (0, json.dumps({
+                "result": '{"decision": "reject", "reasoning": "touches main.py outside chunk scope"}',
+                "total_cost_usd": 0.2,
+            }), ""),
+            "pr close":         (0, "✓ closed", ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["review_decision"] == "reject"
+        assert record["pr_closed"] is True
+        close_cmd = next(c for c in tr._runner.calls if "pr close" in " ".join(c))
+        # The reasoning is included in the close comment.
+        assert any("touches main.py" in arg for arg in close_cmd)
+        # No `gh pr merge` call (the reviewer's prompt text mentions "merge",
+        # so substring-matching is too loose — check the gh command shape).
+        assert not any(c[:3] == ["gh", "pr", "merge"]
+                       for c in tr._runner.calls)
 
 
 def test_execute_dispatch_error_lands_in_the_log_not_a_crash():
