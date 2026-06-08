@@ -120,7 +120,10 @@ def test_picker_rc_non_zero_logs_picker_error():
 # Audit kind
 # --------------------------------------------------------------------------- #
 def test_audit_kind_runs_the_command_field():
-    audit_command = "python3 services/auditor/audit.py --repo /repos/dolios --name dolios --history .dolios/metrics/dolios/history.jsonl"
+    audit_command = (
+        "python3 services/auditor/audit.py --repo /repos/dolios --name dolios "
+        "--history .dolios/metrics/dolios/history.jsonl"
+    )
     with tempfile.TemporaryDirectory() as tmp:
         tr = _make({
             "--preflight-only": _preflight_ok(),
@@ -266,7 +269,8 @@ def test_review_rejects_and_closes_pr_with_reasoning_comment():
             "pr diff":          (0, "diff", ""),
             "pr view":          (0, "{}", ""),
             "claude":           (0, json.dumps({
-                "result": '{"decision": "reject", "reasoning": "touches main.py outside chunk scope"}',
+                "result": ('{"decision": "reject", "reasoning": '
+                           '"touches main.py outside chunk scope"}'),
                 "total_cost_usd": 0.2,
             }), ""),
             "pr close":         (0, "✓ closed", ""),

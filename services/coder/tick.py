@@ -34,8 +34,8 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 HERE = Path(__file__).resolve().parent
 DOLIOS_ROOT = HERE.parent.parent  # services/coder/ → dolios/
@@ -128,7 +128,7 @@ class TickRunner:
         self._now = now
 
     @staticmethod
-    def _real_runner(cmd: list[str], cwd: Path) -> "tuple[int, str, str]":
+    def _real_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
         return r.returncode, r.stdout, r.stderr
 

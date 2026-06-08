@@ -19,15 +19,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
-
 
 # Subprocess runner shape; injectable for tests.
 Runner = Callable[[list[str], Path], "tuple[int, str, str]"]
 
 
-def _real_runner(cmd: list[str], cwd: Path) -> "tuple[int, str, str]":
+def _real_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
     r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
 

@@ -14,8 +14,8 @@ No model is invoked from this module. It returns strings.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 MEMORIES_DIR = "infra/hermes/memories"
 SKILLS_DIR = "infra/hermes/skills"
