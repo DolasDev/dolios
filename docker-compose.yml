@@ -85,12 +85,21 @@ services:
   # separately, OR plaintext via the bound port below if you trust the tailnet).
   # See infra/matrix/README.md for the full bring-up.
   matrix:
-    image: matrixconduit/matrix-conduit:v0.10.6
+    image: matrixconduit/matrix-conduit:v0.10.12
     restart: unless-stopped
     environment:
+      # Conduit's entrypoint hard-requires CONDUIT_CONFIG to exist; the empty
+      # string tells it "no TOML file, configure from CONDUIT_* env vars only."
+      # Without this it panics on boot with "CONDUIT_CONFIG env var needs to be set".
+      CONDUIT_CONFIG: ""
       CONDUIT_SERVER_NAME: ${CONDUIT_SERVER_NAME:-dolo-docker.tail9d4ce8.ts.net}
       CONDUIT_DATABASE_BACKEND: rocksdb
       CONDUIT_DATABASE_PATH: /var/lib/matrix-conduit/conduit_db
+      # Bind on all interfaces inside the container; the host-side port mapping
+      # still constrains exposure to 127.0.0.1 only. Without this Conduit's
+      # default of binding 127.0.0.1 *inside* the container is unreachable from
+      # the host port-forward and from other compose services.
+      CONDUIT_ADDRESS: "0.0.0.0"
       CONDUIT_PORT: 6167
       CONDUIT_MAX_REQUEST_SIZE: 20000000
       # Closed by default — flip true ONE time via env to register the bot +
