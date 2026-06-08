@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install pytest ruff
+      - run: pip install pytest ruff pyyaml
       - run: make audit-test
       - run: make usage-test
       - run: make coder-test

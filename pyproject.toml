@@ -5,3 +5,10 @@ extend-exclude = [".dolios", "infra/ollama"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Prompt-template files: long string literals are sent verbatim to claude.
+# Wrapping them with backslash continuations would either change the prompt
+# content or just be cosmetic noise. Exempt the line-length rule for these.
+"services/coder/prompts.py"  = ["E501"]
+"services/coder/reviewer.py" = ["E501"]

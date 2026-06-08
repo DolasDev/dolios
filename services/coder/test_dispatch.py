@@ -105,7 +105,8 @@ def test_config_load_expands_env_vars_in_allowlist_paths():
     with tempfile.TemporaryDirectory() as tmp:
         cfg_path = os.path.join(tmp, "coder.yaml")
         with open(cfg_path, "w") as fh:
-            fh.write("allowlist:\n  dolios: ${REPOS_ROOT}/dolios\n  pegasus: ${REPOS_ROOT}/pegasus\n")
+            fh.write("allowlist:\n  dolios: ${REPOS_ROOT}/dolios\n"
+                     "  pegasus: ${REPOS_ROOT}/pegasus\n")
         os.environ["REPOS_ROOT"] = "/opt/data/repos"
         try:
             cfg = d.Config.load(cfg_path)
