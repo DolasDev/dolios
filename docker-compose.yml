@@ -75,5 +75,41 @@ services:
     #   docker compose run --rm hermes-autonomous-coder chat -q "who are you?" --profile autonomous-coder
     command: ["gateway", "run", "--profile", "autonomous-coder"]
 
+  # Self-hosted Matrix homeserver (Conduit — Rust, lightweight). Lives on
+  # dolo-docker, reachable only via Tailscale, federation disabled, registration
+  # off (open it momentarily once to create the bot + your user, then close).
+  # Hermes-agent talks to it at http://matrix:6167 via the compose network using
+  # `MATRIX_HOMESERVER` in the profile .env; Element clients on your devices
+  # reach it via the tailnet FQDN (Tailscale-issued TLS cert at
+  # https://dolo-docker.tail9d4ce8.ts.net via a reverse proxy you set up
+  # separately, OR plaintext via the bound port below if you trust the tailnet).
+  # See infra/matrix/README.md for the full bring-up.
+  matrix:
+    image: matrixconduit/matrix-conduit:v0.10.6
+    restart: unless-stopped
+    environment:
+      CONDUIT_SERVER_NAME: ${CONDUIT_SERVER_NAME:-dolo-docker.tail9d4ce8.ts.net}
+      CONDUIT_DATABASE_BACKEND: rocksdb
+      CONDUIT_DATABASE_PATH: /var/lib/matrix-conduit/conduit_db
+      CONDUIT_PORT: 6167
+      CONDUIT_MAX_REQUEST_SIZE: 20000000
+      # Closed by default — flip true ONE time via env to register the bot +
+      # your user, then flip back off and restart.
+      CONDUIT_ALLOW_REGISTRATION: ${CONDUIT_ALLOW_REGISTRATION:-false}
+      # Federation off — nothing leaves the tailnet, no public DNS / inbound
+      # required. Flip on later if you ever want federation.
+      CONDUIT_ALLOW_FEDERATION: "false"
+      CONDUIT_ENABLE_LIGHTNING_BOLT: "false"
+      CONDUIT_TRUSTED_SERVERS: '[]'
+    volumes:
+      - matrix_data:/var/lib/matrix-conduit
+    ports:
+      # Bind to host loopback only. From the LAN/tailnet, reach via a reverse
+      # proxy on dolo-docker (Tailscale-issued TLS), or via SSH tunnel for
+      # debugging. The hermes container reaches matrix via the compose network
+      # at `matrix:6167` — no host port needed for that path.
+      - "127.0.0.1:6167:6167"
+
 volumes:
   pgdata:
+  matrix_data:

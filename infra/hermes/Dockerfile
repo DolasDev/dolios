@@ -2,10 +2,13 @@
 #
 # A thin layer over Nous Research's *official* published image (s6-overlay
 # supervision, non-root with HERMES_UID remap, ENTRYPOINT /init + main-wrapper).
-# We add only the two host tools the `autonomous-coder` dispatcher shells out to
+# We add only the host tools the `autonomous-coder` dispatcher shells out to
 # and which the base image does NOT ship:
 #   - gh      — opens pull requests (services/coder/dispatch.py)
 #   - claude  — Claude Code, the headless engineer the supervisor dispatches to
+#   - matrix  — hermes-agent's optional `[matrix]` extra (mautrix SDK + olm for
+#               E2EE). Activated by setting MATRIX_HOMESERVER / MATRIX_ACCESS_TOKEN
+#               in the profile .env; with those unset the adapter is dormant.
 # The base already provides node/npm, git, ripgrep, openssh-client and docker-cli.
 #
 # Pinned by digest for reproducibility (tag `main`/`latest` as of 2026-05-27).
@@ -30,14 +33,21 @@ RUN set -eux; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list; \
     apt-get update; \
-    apt-get install -y --no-install-recommends gh; \
+    # gh    — pull requests; libolm-dev — E2EE for the matrix adapter (compiles
+    # python-olm bindings at pip-install time; runtime needs libolm3 only, kept
+    # as a transitive dep of libolm-dev so it sticks around after apt cleanup).
+    apt-get install -y --no-install-recommends gh libolm-dev; \
     rm -rf /var/lib/apt/lists/*; \
     # --- Claude Code (npm global; base ships node/npm) ---
     npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
     npm cache clean --force; \
-    # --- fail loudly if either tool isn't on PATH ---
+    # --- hermes-agent matrix extra (mautrix SDK + e2ee). The base image already
+    # has hermes-agent installed; pip will resolve just the missing extras.
+    pip install --no-cache-dir 'hermes-agent[matrix]'; \
+    # --- fail loudly if any tool isn't on PATH ---
     gh --version; \
-    claude --version
+    claude --version; \
+    python3 -c 'import mautrix, olm'  # E2EE-capable matrix client present
 
 # Container init hook (s6 cont-init.d) that wires git's credential helper to
 # GH_TOKEN, so autonomous pushes work without SSH keys. Runs at every container
