@@ -17,7 +17,8 @@ SWITCH := ./infra/gpu-stack.sh
         coder-preflight coder-test \
         audit audit-gaps audit-test \
         backlog-next backlog-test chunks-test \
-        tick tick-test prompts-test install-coder-cron ask ask-q
+        tick tick-test prompts-test install-coder-cron ask ask-q \
+        matrix-up matrix-up-register matrix-logs matrix-down
 
 up:
 	docker compose up -d
@@ -120,8 +121,24 @@ tick-test:
 prompts-test:
 	@cd services/coder && python3 test_prompts.py
 
-# Install the cron wrapper at the path `hermes cron --script` expects
-# (~/.hermes/scripts/), then register the schedule. One-time setup per host.
+# Conduit (self-hosted Matrix homeserver) — see infra/matrix/README.md.
+# `matrix-up-register` opens registration ONE time so you can create the bot +
+# your account; then run `matrix-up` (registration closed again) to lock it.
+matrix-up:
+	docker compose up -d matrix
+
+matrix-up-register:
+	CONDUIT_ALLOW_REGISTRATION=true docker compose up -d matrix
+	@echo
+	@echo "Conduit is up with registration OPEN. Create accounts, then run:"
+	@echo "  make matrix-up   # closes registration again"
+
+matrix-logs:
+	docker compose logs -f matrix
+
+matrix-down:
+	docker compose stop matrix
+
 # Talk to the autonomous-coder. Interactive TUI session against the live
 # profile — the 35B has tool access to read tick-log.jsonl, the ledger,
 # recent commits, open PRs, audit history, memories, etc. Good for asking
@@ -136,6 +153,8 @@ ask-q:
 	@docker compose exec --user hermes -w /opt/data/repos/dolios \
 	  hermes-autonomous-coder hermes -p autonomous-coder chat -q "$(Q)"
 
+# Install the cron wrapper at the path `hermes cron --script` expects
+# (~/.hermes/scripts/), then register the schedule. One-time setup per host.
 install-coder-cron:
 	@mkdir -p $(HOME)/.hermes/scripts
 	@install -m 0755 infra/hermes/scripts/dolios-tick.sh $(HOME)/.hermes/scripts/dolios-tick.sh

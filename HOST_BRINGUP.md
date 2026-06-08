@@ -75,6 +75,25 @@ the policy changes.
 - [ ] Negatives: a non-allowlisted `--repo` is refused; with the gate forced to
       hold it refuses; clean up the smoke branch/PR.
 
+## 5b. Matrix front-end (optional — chat with the bot)
+
+Self-hosted Matrix homeserver (Conduit) on dolo-docker, Tailscale-only,
+federation off. Lets you DM the autonomous-coder from Element on phone/laptop.
+
+- [ ] Decide whether you want it now (it's optional; the loop runs without it).
+- [ ] Follow `infra/matrix/README.md` end-to-end: bring `matrix` service up with
+      `CONDUIT_ALLOW_REGISTRATION=true` once, register the bot + your account
+      via the SSH-tunneled Element session, close registration, copy the access
+      token into `~/.hermes/profiles/autonomous-coder/.env`
+      (`MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN`, `MATRIX_ALLOWED_USERS`),
+      `docker compose restart hermes-autonomous-coder`.
+- [ ] Smoke: from your Element client, DM `@autonomous-coder:…` "hi" — bot
+      should respond.
+- [ ] (Recommended) Issue a Tailscale-managed cert
+      (`sudo tailscale cert dolo-docker.tail9d4ce8.ts.net`) and front Conduit
+      with a reverse proxy so Element clients can use HTTPS without an SSH
+      tunnel. Setup is generic HTTPS-upstream; see `infra/matrix/README.md`.
+
 ## 6. Go autonomous (Phase 3 loop) — last
 
 Only after 1–5 pass:
