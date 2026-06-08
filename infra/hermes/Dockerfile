@@ -33,21 +33,35 @@ RUN set -eux; \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
       > /etc/apt/sources.list.d/github-cli.list; \
     apt-get update; \
-    # gh    — pull requests; libolm-dev — E2EE for the matrix adapter (compiles
-    # python-olm bindings at pip-install time; runtime needs libolm3 only, kept
-    # as a transitive dep of libolm-dev so it sticks around after apt cleanup).
-    apt-get install -y --no-install-recommends gh libolm-dev; \
+    # Runtime: gh (PR opener), libolm3 (E2EE runtime for the matrix adapter).
+    # Build-time only (purged at the bottom of this layer): build-essential +
+    # cmake so python-olm's sdist can compile its vendored libolm into the
+    # wheel. Keeping these out of the runtime image saves ~400MB.
+    apt-get install -y --no-install-recommends \
+      gh libolm3 \
+      build-essential cmake; \
     rm -rf /var/lib/apt/lists/*; \
     # --- Claude Code (npm global; base ships node/npm) ---
     npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
     npm cache clean --force; \
-    # --- hermes-agent matrix extra (mautrix SDK + e2ee). The base image already
-    # has hermes-agent installed; pip will resolve just the missing extras.
-    pip install --no-cache-dir 'hermes-agent[matrix]'; \
+    # --- hermes-agent matrix extra (mautrix SDK + e2ee). The base image runs
+    # hermes from a uv-managed venv at /opt/hermes/.venv (editable install, no
+    # `pip` on PATH), so install the extras' direct deps into that venv via uv.
+    # Versions track upstream pyproject.toml [project.optional-dependencies].matrix
+    # — bump in lockstep with the base image digest.
+    /usr/local/bin/uv pip install --python /opt/hermes/.venv/bin/python --no-cache \
+      'mautrix[encryption]==0.21.0' \
+      'Markdown==3.10.2' \
+      'aiosqlite==0.22.1' \
+      'asyncpg==0.31.0' \
+      'aiohttp-socks==0.11.0'; \
+    # --- drop the C toolchain now that python-olm is built ---
+    apt-get purge -y --auto-remove build-essential cmake; \
+    rm -rf /var/lib/apt/lists/*; \
     # --- fail loudly if any tool isn't on PATH ---
     gh --version; \
     claude --version; \
-    python3 -c 'import mautrix, olm'  # E2EE-capable matrix client present
+    /opt/hermes/.venv/bin/python3 -c 'import mautrix, olm'  # E2EE-capable matrix client present
 
 # Container init hook (s6 cont-init.d) that wires git's credential helper to
 # GH_TOKEN, so autonomous pushes work without SSH keys. Runs at every container

@@ -111,7 +111,9 @@ step 1.
   back in place.
 - **Bumping Conduit.** Change the image tag in `docker-compose.yml`
   (`matrixconduit/matrix-conduit:vX.Y.Z`) and `docker compose up -d matrix`.
-  Conduit is still pre-1.0; pin a specific tag, don't track `latest`.
+  Conduit is still pre-1.0; pin a specific tag, don't track `latest`. Watch the
+  startup welcome-changelog in the logs — Conduit shouts about every released
+  version after yours, including CVE fixes, so it's easy to spot when to bump.
 - **Federation.** Stay off unless you have a reason. Flipping it on requires
   public DNS for the server name, an `.well-known/matrix/server` file, and a
   publicly reachable port — none of which you want for a fleet-internal bus.
