@@ -17,7 +17,7 @@ SWITCH := ./infra/gpu-stack.sh
         coder-preflight coder-test \
         audit audit-gaps audit-test \
         backlog-next backlog-test chunks-test \
-        tick tick-test prompts-test install-coder-cron
+        tick tick-test prompts-test install-coder-cron ask ask-q
 
 up:
 	docker compose up -d
@@ -122,6 +122,20 @@ prompts-test:
 
 # Install the cron wrapper at the path `hermes cron --script` expects
 # (~/.hermes/scripts/), then register the schedule. One-time setup per host.
+# Talk to the autonomous-coder. Interactive TUI session against the live
+# profile — the 35B has tool access to read tick-log.jsonl, the ledger,
+# recent commits, open PRs, audit history, memories, etc. Good for asking
+# "what's been done lately?", "why did chunk 3 cost more?", "show me the
+# latest reflect memory", etc.
+ask:
+	@docker compose exec --user hermes -w /opt/data/repos/dolios \
+	  hermes-autonomous-coder hermes -p autonomous-coder --tui
+
+# One-shot question. `make ask-q Q="what work has been done this week?"`
+ask-q:
+	@docker compose exec --user hermes -w /opt/data/repos/dolios \
+	  hermes-autonomous-coder hermes -p autonomous-coder chat -q "$(Q)"
+
 install-coder-cron:
 	@mkdir -p $(HOME)/.hermes/scripts
 	@install -m 0755 infra/hermes/scripts/dolios-tick.sh $(HOME)/.hermes/scripts/dolios-tick.sh
