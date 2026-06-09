@@ -89,10 +89,11 @@ federation off. Lets you DM the autonomous-coder from Element on phone/laptop.
       `docker compose restart hermes-autonomous-coder`.
 - [ ] Smoke: from your Element client, DM `@autonomous-coder:…` "hi" — bot
       should respond.
-- [ ] (Recommended) Issue a Tailscale-managed cert
-      (`sudo tailscale cert dolo-docker.tail9d4ce8.ts.net`) and front Conduit
-      with a reverse proxy so Element clients can use HTTPS without an SSH
-      tunnel. Setup is generic HTTPS-upstream; see `infra/matrix/README.md`.
+- [ ] (Recommended) Expose Conduit on `https://dolo-docker.tail9d4ce8.ts.net`
+      via `tailscale serve --bg http://127.0.0.1:6167` so Element clients can
+      reach it without an SSH tunnel. One-time tailnet console enables (Serve
+      + HTTPS-certs) and `sudo tailscale set --operator=$USER`; full details
+      in `infra/matrix/README.md` "TLS via `tailscale serve`".
 
 ## 6. Go autonomous (Phase 3 loop) — last
 

@@ -95,24 +95,46 @@ Continue → log in as `steve` with your password**. Start a chat with
 replies. Once that works you can use the in-app password change to set
 something memorable.
 
-## TLS via Tailscale (recommended for clients)
+## TLS via `tailscale serve` (no reverse proxy needed)
 
-Element clients want HTTPS. Issue a Tailscale-managed cert on the dolo-docker
-host (one-time):
+For phone/native clients (or just so you don't have to keep an SSH tunnel
+open), expose Conduit on `https://dolo-docker.tail9d4ce8.ts.net` via
+[Tailscale Serve](https://tailscale.com/kb/1242/tailscale-serve). It
+terminates TLS itself, auto-renews the Let's Encrypt cert through Tailscale's
+CA path, binds to the tailnet only (not the public internet), and persists
+across reboots — no Caddy/nginx, no cert files on disk, no renewal cron.
+
+**One-time tailnet setup** (admin console):
+
+1. Enable Serve at <https://login.tailscale.com/admin/acls/file> (Acls →
+   "TailscaleAdmin" feature, or follow the deep link Tailscale prints when
+   you first run `tailscale serve`).
+2. Enable HTTPS certificates if not already on (same console).
+3. On the host: `sudo tailscale set --operator=$USER` once, so `tailscale
+   serve` / `tailscale cert` don't need sudo afterwards.
+
+**Wire up the proxy** (host, one command):
 
 ```bash
-sudo tailscale cert dolo-docker.tail9d4ce8.ts.net
-# Produces dolo-docker.tail9d4ce8.ts.net.crt + .key in the current dir.
+tailscale serve --bg http://127.0.0.1:6167
 ```
 
-Then put any reverse proxy (Caddy, nginx, traefik) in front of Conduit on
-port 443, terminating TLS with that cert and forwarding to
-`http://127.0.0.1:6167`. Setting that up is out of scope here — it's a single
-HTTPS upstream and isn't Dolios-specific.
+That's it. Verify:
 
-For a quick "does it work" check before you wire the proxy, you can skip TLS
-entirely and point Element at `http://127.0.0.1:6167` via the SSH tunnel from
-step 1.
+```bash
+curl -sS https://dolo-docker.tail9d4ce8.ts.net/_matrix/client/versions
+tailscale serve status
+```
+
+The first call should return the Matrix `versions` array; the second should
+show `https://dolo-docker.tail9d4ce8.ts.net → proxy http://127.0.0.1:6167
+(tailnet only)`.
+
+In Element, swap the homeserver URL from `http://localhost:6167` (the
+tunneled path from Step 5 above) to `https://dolo-docker.tail9d4ce8.ts.net`
+and log in normally. The SSH tunnel can stay closed.
+
+To turn the proxy off: `tailscale serve --https=443 off`.
 
 ## Admin commands (no wipe, no rebuild)
 
