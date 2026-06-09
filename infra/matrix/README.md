@@ -80,10 +80,20 @@ send the agent commands; everyone else is ignored.
 
 ### 5. Start a DM from your Element client to the bot
 
-On your phone/laptop Element, set the homeserver to
-`https://dolo-docker.tail9d4ce8.ts.net` (see TLS note below), log in as
-yourself, start a DM with `@autonomous-coder:dolo-docker.tail9d4ce8.ts.net`,
-and send `hi`. Hermes should reply.
+The simplest first-login path is an SSH tunnel from your laptop plus
+[Element web](https://app.element.io); the TLS reverse proxy below is the
+follow-on once you want phone/native clients without tunneling.
+
+```bash
+# Laptop — leave open while logging in
+ssh -L 6167:127.0.0.1:6167 dolo-docker
+```
+
+In Element web: **Sign in → Edit homeserver → `http://localhost:6167` →
+Continue → log in as `steve` with your password**. Start a chat with
+`@autonomous-coder:dolo-docker.tail9d4ce8.ts.net`, send anything, hermes
+replies. Once that works you can use the in-app password change to set
+something memorable.
 
 ## TLS via Tailscale (recommended for clients)
 
@@ -104,16 +114,58 @@ For a quick "does it work" check before you wire the proxy, you can skip TLS
 entirely and point Element at `http://127.0.0.1:6167` via the SSH tunnel from
 step 1.
 
+## Admin commands (no wipe, no rebuild)
+
+Conduit auto-makes **the first registered account** an admin and auto-joins
+it to the "<server>.tail9d4ce8.ts.net Admin Room" with the server bot
+`@conduit:<server>`. We register the hermes bot first, so the bot's access
+token (already in `MATRIX_ACCESS_TOKEN`) is also an admin token.
+
+To run an admin command, send a message to the admin room prefixed with
+`@conduit:<server>:`. The room ID for this server is currently
+`!ipgwZvBhY6v921wa9n:dolo-docker.tail9d4ce8.ts.net`. Useful commands:
+
+| Command | What it does |
+| --- | --- |
+| `help` | List every admin command. |
+| `help <cmd>` | Per-command usage. |
+| `list-local-users` | All registered accounts. |
+| `reset-password <user>` | Generate a new random password for `<user>` (printed in the reply). Use this when someone forgets a password — no need to wipe the volume. |
+| `deactivate-user @user:<server>` | Deactivate an account. |
+| `allow-registration true\|false` | Toggle registration without a container restart. Does NOT persist across restarts — for that, edit the compose env. |
+| `create-user <name>` | Mint a new user without re-opening registration. |
+
+Quick recipe — reset `@steve`'s password from the host:
+
+```bash
+TOKEN=$(grep -E '^MATRIX_ACCESS_TOKEN=' ~/.hermes/profiles/autonomous-coder/.env | cut -d= -f2-)
+ROOM='!ipgwZvBhY6v921wa9n:dolo-docker.tail9d4ce8.ts.net'
+ENC=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$ROOM")
+TXN=$(date +%s%N)
+curl -sS -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  "http://127.0.0.1:6167/_matrix/client/v3/rooms/$ENC/send/m.room.message/$TXN" \
+  -d '{"msgtype":"m.text","body":"@conduit:dolo-docker.tail9d4ce8.ts.net: reset-password steve"}'
+# Wait a second, then pull @conduit's reply:
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:6167/_matrix/client/v3/rooms/$ENC/messages?dir=b&limit=2" | python3 -m json.tool
+```
+
 ## Operating notes
 
 - **Backups.** RocksDB lives in the `matrix_data` volume. Snapshot it the same
   way you snapshot `pgdata`. Conduit can be restored by dropping the volume
-  back in place.
+  back in place. Wiping the volume is only the right move if the DB itself is
+  corrupted — for forgotten passwords or stuck accounts, use the admin room
+  above instead (no rebuild, no bot token rotation).
 - **Bumping Conduit.** Change the image tag in `docker-compose.yml`
   (`matrixconduit/matrix-conduit:vX.Y.Z`) and `docker compose up -d matrix`.
   Conduit is still pre-1.0; pin a specific tag, don't track `latest`. Watch the
   startup welcome-changelog in the logs — Conduit shouts about every released
   version after yours, including CVE fixes, so it's easy to spot when to bump.
+- **Login probe is not user enumeration.** Conduit returns identical
+  `M_FORBIDDEN: Wrong username or password` for "wrong password" and
+  "no such user" — anti-enumeration. To check whether an account exists, ask
+  `@conduit: list-local-users` in the admin room.
 - **Federation.** Stay off unless you have a reason. Flipping it on requires
   public DNS for the server name, an `.well-known/matrix/server` file, and a
   publicly reachable port — none of which you want for a fleet-internal bus.
