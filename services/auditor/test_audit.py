@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import audit as a
@@ -28,13 +29,16 @@ def _init_git(repo: Path, *, author="dev <dev@x>", commits=None):
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "dev@x"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "dev"], cwd=repo, check=True)
+    # Pin dates for determinism, but relative to now: the auditor only counts
+    # commits inside its LOOKBACK_DAYS window, so a fixed calendar date rots.
+    when = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for i, (name, content) in enumerate(commits or []):
         (repo / name).parent.mkdir(parents=True, exist_ok=True)
         (repo / name).write_text(content)
         subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
         subprocess.run(["git", "commit", "-q", "-m", f"c{i}"], cwd=repo, check=True,
-                       env={**os.environ, "GIT_AUTHOR_DATE": "2026-05-01T00:00:00Z",
-                            "GIT_COMMITTER_DATE": "2026-05-01T00:00:00Z"})
+                       env={**os.environ, "GIT_AUTHOR_DATE": when,
+                            "GIT_COMMITTER_DATE": when})
 
 
 def _run(repo, *, name="testrepo"):
