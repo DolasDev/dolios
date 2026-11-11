@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import audit as a
@@ -31,7 +31,7 @@ def _init_git(repo: Path, *, author="dev <dev@x>", commits=None):
     subprocess.run(["git", "config", "user.name", "dev"], cwd=repo, check=True)
     # Pin dates for determinism, but relative to now: the auditor only counts
     # commits inside its LOOKBACK_DAYS window, so a fixed calendar date rots.
-    when = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    when = (datetime.now(UTC) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     for i, (name, content) in enumerate(commits or []):
         (repo / name).parent.mkdir(parents=True, exist_ok=True)
         (repo / name).write_text(content)
