@@ -42,3 +42,7 @@ pnpm-debug.log*
 *.swo
 .DS_Store
 Thumbs.db
+
+# memsearch local index state (machine-specific)
+.memsearch/.index-state.json
+.memsearch/.index.pid
