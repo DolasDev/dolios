@@ -15,70 +15,64 @@ Legend: ✅ done · 🔨 in progress · ⏳ next · 🔒 blocked
 - ✅ Spare-capacity gate (`services/usage-gate/`) — normalized usage contract.
 - ✅ Postgres scaffold (`docker-compose.yml`).
 
-## Phase 1 — Provider path (local **+** OpenRouter) 🔨 (host smoke-test pending)
+## Phase 1 — Provider path ✅ (local only, by policy)
 
-Make "pick local or external per employee" real and tested.
+- ✅ Local model is the only provider: `qwen3.6:35b-a3b` on dolo-llm.
+- ✅ OpenRouter fallback **dropped** (`7bf819f`) — fleet policy is **$0 marginal
+      spend**. If dolo-llm is down the supervisor halts cleanly until it returns.
+      (OpenRouter notes in `MODEL_OPTIONS.md` are kept as reference only.)
+- ⚠️ dolo-llm's single GPU is shared with other model servers (koboldcpp etc.);
+      `make llm-up` must be re-run after anything else claims the card, or the
+      fleet has no model.
 
-- ✅ Default OpenRouter model chosen + slug verified against the live models API:
-      `qwen/qwen3-235b-a22b-2507` (same family as local qwen3.6, `tools=True`).
-      Alternatives recorded in `MODEL_OPTIONS.md`.
-- ✅ OpenRouter wired into `autonomous-coder` config as a local-primary fallback;
-      `config.yaml` snippets (OpenRouter-primary and fallback) in `MODEL_OPTIONS.md`.
-- ✅ Secret handling documented: `OPENROUTER_API_KEY` in each profile's
-      `~/.hermes/profiles/<role>/.env` (via `env.example`), **never** in this repo.
-- [ ] **Host smoke-test** (needs the agent image + a real key — can't run on the
-      dev box). On dolo-docker:
-  1. Put `OPENROUTER_API_KEY=sk-or-…` in `~/.hermes/profiles/autonomous-coder/.env`.
-  2. Temporarily set `model.provider: openrouter` /
-     `default: openrouter/qwen/qwen3-235b-a22b-2507`; run
-     `docker compose run --rm hermes-autonomous-coder chat -q "call a tool" --profile autonomous-coder`
-     → confirm a real call + tool-calling works. **Confirm the `openrouter/` prefix here.**
-  3. Restore local primary; stop dolo-llm Ollama (`make llm-down`) and run again →
-     confirm it **fails over** to the OpenRouter fallback.
-  4. Bring Ollama back up; confirm it prefers local again.
+## Phase 2 — Employee / profile framework ✅
 
-## Phase 2 — Employee / profile framework ✅ (host smoke-test pending)
+- ✅ Employee = checked-in spec in `employees/<role>/` (`SOUL.md`, `config.yaml`,
+      `env.example`), materialized by `make employee ROLE=…`; secrets stay in
+      the per-host `.env`.
+- ✅ **Containerized** hermes-agent employees (`infra/hermes/Dockerfile`,
+      `docker-compose.yml`) running on dolo-docker; cont-init hooks set up
+      `gh`/git credentials.
+- ✅ Repo-versioned self-modification surface: `infra/hermes/memories/`,
+      `skills/`, `hooks/`.
+- ✅ Two role specs: `autonomous-coder` (live) + `sim-mover` (stub).
 
-The reproducibility backbone: an employee is a checked-in spec, not a
-hand-built profile.
+## Phase 3 — Role: `autonomous-coder` 🔨 (loop built; stalled since 2026-06-01)
 
-- ✅ Probed hermes-agent mechanics — `config.yaml`/`SOUL.md` are read on startup,
-      so file-based materialization works; full schema captured.
-- ✅ On-disk layout: `employees/<role>/` holds `SOUL.md` + `config.yaml` template
-      + `env.example` + `README.md`, **minus secrets**.
-- ✅ Tracked (SOUL.md, config, env.example) vs runtime (`.env`, sessions, memory,
-      state DB) split; runtime stays out of git.
-- ✅ Materializer `scripts/materialize-employee.sh` (`make employee ROLE=…`):
-      idempotent, backs up + diffs drift, seeds `.env` only if absent, never
-      touches runtime state. `DRY_RUN=1` supported. Verified against a temp base.
-- ✅ Two role specs: `autonomous-coder` (fleshed out) + `sim-mover` (stub).
-- [ ] **Pending:** live smoke-test on the actual host (hermes not installed on
-      the dev box) — materialize a profile and confirm hermes loads SOUL.md +
-      model config.
+Local model supervises; Claude Code does the engineering; humans merge.
 
-## Phase 3 — Role: `autonomous-coder` 🔨
+- ✅ **Guardrailed dispatcher** (`services/coder/dispatch.py`): capacity gate →
+      allowlist → never-base-branch → budget → PR (never merge) → ledger.
+      Chunk mode: deterministic branch, idempotency precheck, atomic
+      checkbox flip.
+- ✅ **Usage gate** (`services/usage-gate/`) with OAuth token refresh and
+      per-window pacing (nightly catch-up model).
+- ✅ **Auditor** (`services/auditor/`) — deterministic repo audit → metrics
+      history (`.dolios/metrics/`) + framework-tagged gaps (DORA, SSDF, OpenSSF).
+- ✅ **Proposal lifecycle** (`proposals/`) — agent-authored proposals from audit
+      gaps; human approves; work runs chunk-by-chunk; remeasure closes it.
+- ✅ **Backlog picker + tick orchestrator** (`backlog.py`, `tick.py`) — one
+      deterministic tick per cron fire: `audit | propose | execute | remeasure |
+      reflect | empty`. Tick log at `.dolios/tick-log.jsonl`.
+- ✅ **Auto-reviewer** (`reviewer.py`) — Claude reviews agent PRs.
+- ✅ Cron wired via `hermes cron create` (`make install-coder-cron`);
+      approvals flipped to auto.
+- ✅ First proposal end-to-end: *adopt GitHub Actions CI* — chunks 1–2 merged
+      (#1, #2), `.github/workflows/ci.yml` live.
+- [ ] **Chunk 3** (`services/auditor/ci_api.py`) — last tick (2026-06-01) failed
+      on `git push` (no creds in container; hook fixed in `baa1d08`). PR #3
+      closed for re-creation; stale branch
+      `auto/coder/dolios-2026-05-28-adopt-github-actions-ci-chunk-3` must be
+      deleted before the coder can retry.
+- [ ] Confirm the cron is actually firing on dolo-docker and ticks resume.
+- [ ] Remeasure + close the CI proposal; let the next audit gap
+      (LICENSE / SECURITY.md / gitleaks / Dependabot / coverage) flow through.
 
-Builds directly on the usage gate. Local model supervises; Claude Code (or an
-OpenRouter model) does the engineering.
+### Chat front-end ✅
 
-- ✅ **Guardrailed dispatcher** (`services/coder/`): gate-check → allowlist →
-      branch-off-base (never `main`) → `claude -p` → budget → `gh pr create`
-      (never merge) → ledger. Guardrails enforced in code; 9 unit tests with
-      mocked git/claude/gh. `make coder-preflight` / `coder-test`.
-- ✅ **Repo allowlist + budget** config (`coder.example.yaml`; real `coder.yaml`
-      git-ignored, per-host).
-- ✅ **Usage-gate token refresh** — OAuth `refresh_token` grant against
-      `api.anthropic.com/v1/oauth/token` (the console endpoint is Cloudflare-
-      gated). Backs up + atomically rewrites creds; aborts before any write on a
-      bad response. `--refresh` / `--refresh-dry-run` / `--auto-refresh`.
-      Unit-tested with a mocked endpoint + temp file; dry-run verified against
-      the real creds. **Not yet run live** — do a real `--refresh` on the host
-      when ready (it rotates your actual Claude credentials).
-- [ ] **Task-selection layer** — expose `dispatch.py` to the hermes model as a
-      guarded tool + a backlog source, so the supervisor can pick work.
-- [ ] **Host run** — enable the `autonomous-coder` cron + flip `approvals` once
-      validated on a host with `hermes` + `claude` + `gh`. Record runs to
-      Postgres (Phase 5) instead of / in addition to the JSONL ledger.
+- ✅ Self-hosted Matrix (Conduit) homeserver (`infra/matrix/`), TLS via
+      `tailscale serve`; admin-room recovery documented.
+- ✅ `make ask` / `make ask-q` CLI shortcuts to query an employee.
 
 ## Phase 4 — Role: `sim-mover` 🔒 (blocked on Pegasus)
 
@@ -113,7 +107,8 @@ domain is still being built out.
 
 ## Immediate next step
 
-Phase 1 + 2 are the unblocked, highest-leverage work: prove the OpenRouter path,
-then define the `employees/<role>/` framework so every later role is just a spec.
-`autonomous-coder` (Phase 3) is the first role we can fully build today, since
-`sim-mover` waits on Pegasus.
+1. Keep dolo-llm serving (`make llm-up`) whenever the fleet should run.
+2. On dolo-docker: delete the stale chunk-3 branch, verify the coder cron, and
+   let it finish the CI proposal autonomously.
+3. Phase 5 (Postgres state + `make fleet-status`) once the loop is running
+   unattended reliably; `sim-mover` stays blocked on Pegasus.
