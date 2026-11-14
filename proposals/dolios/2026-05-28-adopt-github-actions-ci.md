@@ -143,7 +143,7 @@ below as part of the same commit, so a human reviewer sees the implementation
      `OpenSSF Scorecard: Pinned-Dependencies` doorway for later
      `[project.dependencies]` work.
 
-- [ ] **`services/auditor/ci_api.py` — flip the `ci.*` `not_measured` fields to
+- [x] **`services/auditor/ci_api.py` — flip the `ci.*` `not_measured` fields to
    measured.**
    - New module: `services/auditor/ci_api.py`. Function:
      `gh_ci_metrics(owner: str, repo: str, *, token: str | None,
