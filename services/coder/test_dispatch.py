@@ -505,6 +505,34 @@ def test_no_changes_means_no_pr():
         assert rec["pr_url"] == "" and not repo.gh_calls
 
 
+def test_real_gate_auto_refreshes_expired_token():
+    """The cron path must ask the gate to refresh an expired OAuth token
+    rather than fail closed forever (regression: 5-month stall)."""
+    import sys
+    import types
+
+    calls = {}
+    fake = types.ModuleType("usage_gate")
+
+    def gather(**kwargs):
+        calls.update(kwargs)
+        return {"snap": True}
+
+    fake.gather = gather
+    fake.decide = lambda snap, **kw: {"decision": "dispatch", "reason": "ok"}
+    saved = sys.modules.get("usage_gate")
+    sys.modules["usage_gate"] = fake
+    try:
+        out = d._real_gate_decide(85.0, None)
+    finally:
+        if saved is None:
+            sys.modules.pop("usage_gate", None)
+        else:
+            sys.modules["usage_gate"] = saved
+    assert calls.get("auto_refresh") is True, calls
+    assert out["decision"] == "dispatch"
+
+
 def _run_standalone():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
