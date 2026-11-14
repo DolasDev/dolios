@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-11-14-sync-base-before-picking-work
-status: approved
+status: done
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L5@2026-11-14T09:00:59Z
 gap_ids:
@@ -14,7 +14,7 @@ frameworks:
   - "DORA: Monitoring and observability"
 opened:    2026-11-14
 approved:  2026-11-14
-done:      null
+done:      2026-11-14
 ---
 
 # Sync the base branch before every tick acts (stop acting on stale state)
@@ -139,4 +139,70 @@ fast-forwarded the checkout and closed the duplicates.
 
 ## Outcome
 
-> *TBD — appended after the re-measure step.*
+Post row: `.dolios/metrics/dolios/history.jsonl` last line, `audited_at:
+2026-11-14T16:49:15Z` (`git_head: 731af0f`, chunk 2 merged). Baseline cited
+in the frontmatter above; `ops.duplicate_pr_tasks` baseline counted from
+`.dolios/tick-log.jsonl` (09:00–11:30Z window) because the audit row that
+anchors the proposal predates the `ops` metric.
+
+| Metric | Baseline | Post-execution | Δ | Target | Verdict |
+|---|---|---|---|---|---|
+| `ops.duplicate_pr_tasks` | 2 tasks (`remeasure-…-adopt-github-actions-ci` → #19, #20; `propose-compliance-f6003ab812` → #21, #22, #23) | `[]` | `2 → 0` tasks | `[]` | ⚠️ inconclusive — see below |
+| `ops.repeated_failures` *(guard)* | `[]` | `[]` | unchanged | no new sync_error repeats | ✅ ok |
+
+- **Did the hypothesis hold?** Not yet proven. The post row shows
+  `ops.duplicate_pr_tasks == []`, but it also shows `ops.ticks == 0`: the
+  `code_cutoff` (`2026-11-14T16:49:00Z`) was reset by chunk 2's own merge
+  (`services/coder/dispatch.py` and `test_dispatch.py` are both loop code),
+  and the remeasure ran immediately afterwards. Zero post-cutoff ticks
+  means the `[]` is *trivially* empty, not *observationally* empty. The
+  Measurement plan required at least 3 auto-merged agent PRs inside the
+  measured window to call it met; with 0 we must record **inconclusive**
+  and let the next weekly audit decide. The guard metric
+  `ops.repeated_failures` stayed `[]`, so the new `sync_error` kind has
+  not fired at all — but again, that's on 0 ticks post-cutoff, so it is
+  no evidence either way.
+- **Unexpected movement** in non-target metrics (worth flagging, nothing
+  to escalate):
+  - `commits.count` (90-day): `9 → 18` (+9). Explained by the autonomous
+    loop merging two chunks of this proposal plus adjacent coder work in
+    the intervening hours; expected direction for an active dolios day.
+  - `commits.median_lines_changed`: `50 → 135` (+170%). Driven by two
+    chunk-shaped PRs (tick.py + tests for chunk 1, dispatch.py + tests
+    for chunk 2) landing today; well under the proposal's rejected-size
+    bar and nowhere near the "adverse ≥25% rise with no explanation"
+    bar we usually apply, because the cause is obvious (the chunks
+    themselves).
+  - `testing.test_to_source_ratio`: `0.667 → 0.643`. Slight dip because
+    chunk 1 and 2 each added a source file plus modest test additions
+    in existing test files rather than new test files. Not a regression
+    in testing discipline — the same test files gained new cases
+    (`test_tick.py` and `test_dispatch.py` both saw substantive new
+    scenarios). Not actionable.
+- **What we learned**, for the next proposal of this kind:
+  1. **`ops`-metric proposals need to account for cutoff self-reset.**
+     Any proposal whose chunks touch `services/coder/` will reset
+     `ops.code_cutoff` at merge time, which means the first remeasure
+     after chunk completion will see `ticks == 0` by construction. The
+     Measurement plan correctly anticipated this ("inconclusive if
+     fewer than 3 merges"), but the proposal template could make it
+     more prominent — perhaps a stock warning in the Effort & risk
+     section whenever `ops.*` appears in `metrics:`. Alternative: the
+     remeasure dispatcher could defer by N hours / N ticks when the
+     proposal's own merge was the thing that reset the cutoff. See
+     [[0004-ops-cutoff-resets-on-loop-code-merge]].
+  2. **The two-point `--ff-only` approach is live and quiet.** Neither
+     chunk broke anything on the way in: chunk 1's PR (#28) ran its new
+     tests green under the pre-sync loop, chunk 2's PR (#30) was
+     branched from the chunk-1 HEAD (post-merge sync worked — the tick
+     record for #30 carries `synced_to: 529dc5b…`, i.e. the dispatcher
+     fast-forwarded before branching, which is literally what chunk 2
+     adds). That's a soft-but-real end-to-end signal: chunk 2 proves
+     chunk 1 works, even though the metric row doesn't yet.
+  3. **Falsifiability check held.** We didn't optimistically call this
+     "met". The Measurement plan's minimum-evidence threshold prevented
+     a cheap win, and the honest "inconclusive" is more useful than a
+     fragile ✅ would have been: the next remeasure has a real chance of
+     either confirming the fix on a non-trivial sample or surfacing a
+     second staleness source, as the proposal's falsification clause
+     describes.
