@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-05-28-adopt-github-actions-ci
-status: approved
+status: done
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L2@2026-05-28T21:17:28Z
 gap_ids:
@@ -19,7 +19,7 @@ frameworks:
   - "OpenSSF Scorecard: Pinned-Dependencies"
 opened:    2026-05-28
 approved:  null
-done:      null
+done:      2026-11-14
 ---
 
 # Adopt GitHub Actions CI (and make CI itself measurable)
@@ -326,16 +326,50 @@ test runners. Sources consulted are listed inline.
 
 ## Outcome
 
-> *TBD — appended after the re-measure step.*
+Re-measured 2026-11-14T10:00:05Z (history.jsonl line 4) against baseline
+line 2 (2026-05-28T21:17:28Z).
 
 | Metric | Baseline | Post-execution | Δ | Target | Verdict |
 |---|---|---|---|---|---|
-| `ci.github_actions_present` | `false` | TBD | TBD | `true` | TBD |
-| `ci.workflow_count` | `0` | TBD | TBD | `>= 1` | TBD |
-| `ci.test_runs_on_pr` | `null` | TBD | TBD | `true` | TBD |
-| `ci.median_runtime_seconds` | `null` | TBD | TBD | `< 300` | TBD |
-| `ci.success_rate_30d` *(new)* | n/a | TBD | TBD | `>= 0.80` | TBD |
+| `ci.github_actions_present` | `false` | `true` | `false → true` | `true` | **met** |
+| `ci.workflow_count` | `0` | `1` | `+1` | `>= 1` | **met** |
+| `ci.test_runs_on_pr` | `null` (`not_measured`) | `false` | `null → false` | `true` | **missed** |
+| `ci.median_runtime_seconds` | `null` (`not_measured`) | `15` | `null → 15` | `< 300` | **met** |
+| `ci.success_rate_30d` *(new)* | n/a | `1.0` | n/a → `1.0` | `>= 0.80` | **met** |
+| `commits.median_lines_changed` *(guard)* | `114` | `50` | `-64` (`-56%`) | no `> +25%` move | **ok** (moved favourably) |
+| `commits.count` *(guard)* | `27` | `9` | `-18` | no adverse drop | **caveat** — drop driven by fleet shape change (`distinct_authors` 3 → 1 as the autonomous coder took over commits), not by CI gating |
 
-- **Did the hypothesis hold?** TBD.
-- **Unexpected movement** in guard metrics: TBD.
-- **What we learned**, for the next proposal of this kind: TBD.
+- **Did the hypothesis hold?** **Partially.** Arm 1 (workflow exists, count
+  ≥ 1) held cleanly — chunk 1 landed `.github/workflows/ci.yml` and the
+  auditor sees it. Arm 2 (CI metrics flip from `not_measured` to measured)
+  mostly held — `median_runtime_seconds` and `success_rate_30d` are now
+  populated with sensible values — but `test_runs_on_pr` came back `false`
+  despite the workflow actually running on PRs #15–#18 in the
+  measurement window. Root cause (verified in `services/auditor/ci_api.py`):
+  `_fetch_runs` filters the API with `?branch=main`, but
+  `pull_request`-triggered runs report their head (feature) branch, not
+  `main` — so the filter excludes exactly the runs that would set the flag
+  to `true`. This is a measurement bug, not a CI gap. Follow-up proposal
+  should drop the `branch=main` filter from the `test_runs_on_pr` path (or
+  make two queries) before the flag can be trusted.
+- **Unexpected movement** in guard metrics: `commits.median_lines_changed`
+  moved *downward* (114 → 50), the opposite direction of the feared breach;
+  CI did not pressure us into bundling. `commits.count` fell from 27 to 9
+  and `commits.distinct_authors` from 3 → 1 — both reflect the autonomous
+  coder becoming the primary author on this repo over the measurement
+  window, not a CI-induced throttle. The "anti-test" (at least one PR
+  blocked by a failing CI run) was not organically triggered: no PR red-
+  lighted in the window, so the gate's teeth are still unverified.
+- **What we learned**, for the next proposal of this kind:
+  1. `github_actions_present == true` is a weak proxy for "CI is actually
+     exercising PRs"; a future proposal should treat `test_runs_on_pr` as
+     the real success criterion and include a measurement-sanity check (a
+     test that simulates a failing PR) rather than trusting the metric
+     flip alone.
+  2. When a new auditor field (`success_rate_30d`) is introduced by a
+     chunk, the Outcome row has no true baseline — "n/a → value" is the
+     honest shape; proposals introducing new metrics should say so in the
+     Measurement plan rather than pretending the baseline is `0`.
+  3. The `branch=main` API filter is a subtle footgun in
+     `ci_api._fetch_runs`; see
+     `infra/hermes/memories/0003-gh-api-branch-main-excludes-pr-runs.md`.
