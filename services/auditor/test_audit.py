@@ -16,8 +16,10 @@ import sys
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 import audit as a
+import ci_api
 
 
 # --------------------------------------------------------------------------- #
@@ -163,6 +165,126 @@ def test_regex_secret_sweep_flags_an_aws_key():
         # And there's a high-sev gap for it.
         assert any(g["area"] == "security" and g["severity"] == "high"
                    and "regex sweep" in g["summary"] for g in snap["gaps"])
+
+
+# --------------------------------------------------------------------------- #
+# GH Actions API half (chunk 3) — mocked so tests stay offline
+# --------------------------------------------------------------------------- #
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _fake_runs_payload():
+    """Six runs: four recent + successful, one recent + failed, one PR-triggered.
+    Shapes the fields gh_ci_metrics computes so we can check all three at once."""
+    now = datetime.now(UTC)
+    def run(minutes_ago, duration_s, event, conclusion, status="completed"):
+        created = now - timedelta(minutes=minutes_ago)
+        started = created
+        updated = created + timedelta(seconds=duration_s)
+        return {
+            "status": status,
+            "conclusion": conclusion,
+            "event": event,
+            "created_at": _iso(created),
+            "run_started_at": _iso(started),
+            "updated_at": _iso(updated),
+        }
+    return {
+        "workflow_runs": [
+            run(60,   120, "push",         "success"),
+            run(120,  180, "push",         "success"),
+            run(180,  240, "pull_request", "success"),
+            run(240,  150, "push",         "success"),
+            run(300,  200, "push",         "failure"),
+            # Older than 30d but inside 90d lookback: feeds median, not success rate.
+            run(60 * 24 * 45, 300, "push", "success"),
+        ]
+    }
+
+
+def test_gh_ci_metrics_null_shape_when_no_token():
+    out = ci_api.gh_ci_metrics("acme", "r", token=None)
+    # Status quo for unauthenticated runs: no behaviour change.
+    assert out["test_runs_on_pr"] is None
+    assert out["median_runtime_seconds"] is None
+    assert out["success_rate_30d"] is None
+    assert "_note" in out
+
+
+def test_gh_ci_metrics_computes_fields_from_mocked_api():
+    with mock.patch.object(ci_api, "_fetch_runs", return_value=_fake_runs_payload()):
+        out = ci_api.gh_ci_metrics("acme", "r", token="t")
+    assert out["test_runs_on_pr"] is True
+    assert isinstance(out["median_runtime_seconds"], int)
+    assert out["median_runtime_seconds"] > 0
+    # 4 success / 5 completed inside the 30d window = 0.80.
+    assert out["success_rate_30d"] == 0.8
+    # Measured shape drops the `_note` placeholder.
+    assert "_note" not in out
+
+
+def test_audit_ci_merges_api_fields_and_graduates_not_measured():
+    """With token set, audit_ci() merges the API-derived fields into its
+    existing filesystem-only output, and run() drops the ci.* rows from
+    `not_measured`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        (repo / ".github" / "workflows").mkdir(parents=True)
+        (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\non: [push]\njobs: {}\n")
+        _init_git(repo, commits=[("a.py", "x = 1\n")])
+        subprocess.run(
+            ["git", "remote", "add", "origin", "git@github.com:acme/r.git"],
+            cwd=repo, check=True,
+        )
+        with mock.patch.object(ci_api, "_fetch_runs", return_value=_fake_runs_payload()):
+            snap = a.run(repo, "t", gh_token="fake")
+        ci = snap["metrics"]["ci"]
+        # Filesystem half still measured.
+        assert ci["github_actions_present"] is True
+        assert ci["workflow_count"] == 1
+        # API half now measured.
+        assert ci["test_runs_on_pr"] is True
+        assert isinstance(ci["median_runtime_seconds"], int)
+        assert ci["success_rate_30d"] == 0.8
+        # And graduated out of the deferred-metrics list.
+        nm_paths = {e["path"] for e in snap["not_measured"]}
+        assert not any(p.startswith("ci.") for p in nm_paths)
+
+
+def test_derive_gaps_adds_test_reliability_gap_below_threshold():
+    """A measured success_rate_30d under 0.80 adds a high-severity
+    DORA: Test reliability gap."""
+    # Build the minimal metrics shape derive_gaps consumes.
+    metrics = {
+        "ci": {
+            "github_actions_present": True,
+            "other_ci_detected": False,
+            "success_rate_30d": 0.5,
+        },
+        "security": {
+            "gitleaks_config_present": True,
+            "regex_secret_finding_count": 0,
+            "openssf_scorecard_present": True,
+        },
+        "docs": {
+            "license_present": True,
+            "security_md_present": True,
+            "codeowners_present": True,
+        },
+        "testing": {"coverage_measured": True},
+        "dependencies": {"dependabot_config": True, "renovate_config": False},
+    }
+    gaps = a.derive_gaps(metrics)
+    reliability = [g for g in gaps if "Test reliability" in " ".join(g.get("frameworks", []))]
+    assert len(reliability) == 1
+    assert reliability[0]["severity"] == "high"
+    assert reliability[0]["area"] == "ci"
+
+    # And the inverse: at/above threshold → no reliability gap.
+    metrics["ci"]["success_rate_30d"] = 0.95
+    gaps = a.derive_gaps(metrics)
+    assert not any("Test reliability" in " ".join(g.get("frameworks", [])) for g in gaps)
 
 
 # --------------------------------------------------------------------------- #
