@@ -81,7 +81,7 @@ fast-forwarded the checkout and closed the duplicates.
   clean ff, not-on-main → sync_error, foreign dirt → sync_error, fetch failure
   → sync_error, and pending audit rows preserved across the sync. Keep
   `make coder-test` and `ruff check services/` green.
-- [ ] **Dispatch: branch from an up-to-date base in every target repo.** In
+- [x] **Dispatch: branch from an up-to-date base in every target repo.** In
   `services/coder/dispatch.py` `dispatch()`, after the clean-tree check and
   before `git checkout -b <branch> <base>`, run `git fetch origin <base>` and
   `git merge --ff-only origin/<base>` in the target repo (only when HEAD is
