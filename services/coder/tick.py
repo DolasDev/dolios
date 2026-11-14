@@ -208,6 +208,13 @@ class TickRunner:
             preflight.get("gate", {}).get("binding_headroom_pct")
         )
 
+        # 1b. Sync the checkout to origin/main before reading state. If the
+        # fast-forward can't happen cleanly, we refuse to pick work — a stale
+        # checkout is how the loop opened duplicate PRs
+        # (proposals/dolios/2026-11-14-sync-base-before-picking-work.md).
+        if not self._sync_to_base(record):
+            return record
+
         # 2. Picker.
         pk_rc, pk_out, pk_err = self._runner(
             ["python3", "services/coder/backlog.py", "--next"],
@@ -294,6 +301,140 @@ class TickRunner:
         self._log(record)
         return record
 
+    # -- origin/<base> sync -------------------------------------------- #
+    def _sync_to_base(self, record: dict, base: str = "main") -> bool:
+        """Fast-forward `self.root` to `origin/<base>` before picking work.
+
+        Returns True on success (record gets `synced_to` = new HEAD sha);
+        False on any failure (record gets `kind: "sync_error"` + an
+        `error` field, is logged, and the tick is over).
+
+        Preconditions: HEAD is `<base>` and the working tree has no dirty
+        paths outside `.dolios/metrics/` (the fleet's runtime-state
+        exemption from `dispatch.EXEMPT_DIRTY_PREFIXES`). Pending local
+        audit rows in dirty metrics files would block the ff-merge, so we
+        snapshot each such file, `git checkout --` it, ff-merge, then
+        re-append rows whose `audited_at` is not already present in the
+        updated file. Order of local rows is preserved.
+        """
+        sys.path.insert(0, str(HERE))
+        try:
+            import dispatch as _dispatch
+        except ImportError as exc:
+            return self._sync_fail(record, f"cannot import dispatch: {exc}")
+
+        # HEAD must be on base.
+        rc, out, err = self._runner(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], self.root)
+        if rc != 0:
+            return self._sync_fail(
+                record, f"git rev-parse HEAD failed: {(err or out)[:300]}")
+        head_branch = out.strip()
+        if head_branch != base:
+            return self._sync_fail(
+                record, f"HEAD is '{head_branch}', not '{base}'")
+
+        # Working tree must have no non-exempt dirt.
+        rc, out, err = self._runner(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            self.root)
+        if rc != 0:
+            return self._sync_fail(
+                record, f"git status failed: {(err or out)[:300]}")
+        dirty_paths = _dispatch._porcelain_paths(out)
+        blocking = [p for p in dirty_paths if not _dispatch._is_exempt(p)]
+        if blocking:
+            return self._sync_fail(
+                record, f"foreign dirt blocks sync: {blocking[:10]}")
+
+        # Snapshot + reset pending metrics files so the ff-merge isn't
+        # blocked. Keep a copy of their local rows for re-append after.
+        pending: dict[str, list[dict]] = {}
+        for p in dirty_paths:
+            if not _dispatch._is_exempt(p):
+                continue
+            full = self.root / p
+            try:
+                text = full.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            rows = []
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            pending[p] = rows
+            rc, co_out, co_err = self._runner(
+                ["git", "checkout", "--", p], self.root)
+            if rc != 0:
+                self._restore_pending_rows(pending)
+                return self._sync_fail(
+                    record,
+                    f"git checkout -- {p} failed: {(co_err or co_out)[:300]}")
+
+        # Fetch + ff-merge.
+        rc, out, err = self._runner(
+            ["git", "fetch", "origin", base], self.root)
+        if rc != 0:
+            self._restore_pending_rows(pending)
+            return self._sync_fail(
+                record, f"git fetch origin {base} failed: {(err or out)[:300]}")
+        rc, out, err = self._runner(
+            ["git", "merge", "--ff-only", f"origin/{base}"], self.root)
+        if rc != 0:
+            self._restore_pending_rows(pending)
+            return self._sync_fail(
+                record,
+                f"git merge --ff-only origin/{base} failed: {(err or out)[:300]}")
+
+        # Re-append local audit rows that aren't already in the merged file.
+        self._restore_pending_rows(pending)
+
+        rc, out, _ = self._runner(["git", "rev-parse", "HEAD"], self.root)
+        if rc == 0 and out.strip():
+            record["synced_to"] = out.strip()
+        return True
+
+    def _sync_fail(self, record: dict, error: str) -> bool:
+        record.update({"kind": "sync_error", "error": error})
+        self._log(record)
+        return False
+
+    def _restore_pending_rows(self, pending: dict[str, list[dict]]) -> None:
+        """Re-append rows whose `audited_at` isn't already in the file on
+        disk, preserving the local order."""
+        for rel, rows in pending.items():
+            if not rows:
+                continue
+            full = self.root / rel
+            existing: set[str] = set()
+            if full.exists():
+                try:
+                    for line in full.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            at = json.loads(line).get("audited_at", "")
+                        except json.JSONDecodeError:
+                            continue
+                        if at:
+                            existing.add(at)
+                except OSError:
+                    pass
+            full.parent.mkdir(parents=True, exist_ok=True)
+            with full.open("a") as fh:
+                for row in rows:
+                    at = row.get("audited_at", "")
+                    if at and at in existing:
+                        continue
+                    fh.write(json.dumps(row) + "\n")
+                    if at:
+                        existing.add(at)
 
     # -- kind=reflect handler ------------------------------------------- #
     def _handle_reflect(self, job: dict, record: dict) -> None:
@@ -518,7 +659,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"watchdog failed: {exc}", file=sys.stderr)
 
-    if record["kind"] in ("preflight_error", "picker_error", "error"):
+    if record["kind"] in ("preflight_error", "picker_error", "sync_error", "error"):
         return 2
     if record.get("dispatch_rc", 0) != 0 or record.get("audit_rc", 0) != 0:
         return 1

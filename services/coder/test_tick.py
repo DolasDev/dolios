@@ -37,7 +37,23 @@ class FakeRunner:
         return 0, "", ""
 
 
-def _make(responses: dict, tmp) -> t.TickRunner:
+def _make(responses: dict, tmp, *, sync_defaults: bool = True) -> t.TickRunner:
+    # Keep existing tests oblivious to the sync-before-picker step: provide
+    # a clean-ff default (on main, clean tree, fetch + merge succeed). A test
+    # that wants to drive a sync failure passes its own overrides — matched
+    # first because `responses` is merged ahead of these defaults.
+    if sync_defaults:
+        # Defaults first so tests can override by reusing the same key;
+        # iteration order still finds the shared-key entry at its default
+        # slot, but `{**a, **b}` merging lets `responses` win on value.
+        responses = {
+            "abbrev-ref": (0, "main\n", ""),
+            "status --porcelain": (0, "", ""),
+            "git fetch": (0, "", ""),
+            "ff-only": (0, "", ""),
+            "rev-parse HEAD": (0, "deadbeef\n", ""),
+            **responses,
+        }
     return t.TickRunner(
         root=Path(tmp),
         runner=FakeRunner(responses),
@@ -101,8 +117,8 @@ def test_empty_picker_exits_clean():
         record = tr.run_tick()
         assert record["kind"] == "empty"
         assert record["rationale"] == "no work this tick"
-        # 2 calls: preflight + picker. No third call to a worker.
-        assert len(tr._runner.calls) == 2
+        # preflight + 5 sync subcommands + picker. No worker call after.
+        assert len(tr._runner.calls) == 7
 
 
 def test_picker_rc_non_zero_logs_picker_error():
@@ -235,9 +251,10 @@ def test_review_approves_and_queues_auto_merge_after_successful_execute():
         assert record["review_cost_usd"] == 0.25
         assert record["merge_queued"] is True
         # Order matters: the merge call must come AFTER the dispatch
-        # AND the review.
+        # AND the review. Match on "pr merge" specifically so the sync's
+        # `git merge --ff-only` doesn't shadow this lookup.
         cmds = tr._runner.calls
-        merge_idx = next(i for i, c in enumerate(cmds) if "merge" in " ".join(c))
+        merge_idx = next(i for i, c in enumerate(cmds) if "pr merge" in " ".join(c))
         diff_idx  = next(i for i, c in enumerate(cmds) if "pr diff" in " ".join(c))
         assert diff_idx < merge_idx
 
@@ -592,6 +609,141 @@ def test_tick_log_appends_one_jsonl_row_per_tick():
         rows = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
         assert len(rows) == 3
         assert all(r["kind"] == "hold" for r in rows)
+
+
+# --------------------------------------------------------------------------- #
+# Sync-to-base — runs between preflight and picker
+# --------------------------------------------------------------------------- #
+def test_sync_clean_ff_records_synced_to_and_proceeds_to_picker():
+    """Happy path: HEAD is main, tree is clean, fetch + ff-merge succeed.
+    The tick records `synced_to`, moves on to the picker, and ends clean."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "rev-parse HEAD":   (0, "cafef00d\n", ""),
+            "backlog.py":       (0, json.dumps({
+                "kind": "empty", "rationale": "nothing to do",
+            }), ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "empty"
+        assert record["synced_to"] == "cafef00d"
+        # Sync must happen BEFORE the picker.
+        cmds = [" ".join(str(x) for x in c) for c in tr._runner.calls]
+        merge_idx = next(i for i, c in enumerate(cmds) if "merge --ff-only" in c)
+        picker_idx = next(i for i, c in enumerate(cmds) if "backlog.py" in c)
+        assert merge_idx < picker_idx
+
+
+def test_sync_not_on_main_short_circuits_with_sync_error():
+    """HEAD on a stray branch → sync_error, picker never runs."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "abbrev-ref":       (0, "auto/coder/stray-branch\n", ""),
+            "backlog.py":       (0, json.dumps({"kind": "empty"}), ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "sync_error"
+        assert "auto/coder/stray-branch" in record["error"]
+        assert "main" in record["error"]
+        assert not any("backlog.py" in " ".join(c) for c in tr._runner.calls)
+        assert not any("merge --ff-only" in " ".join(c) for c in tr._runner.calls)
+
+
+def test_sync_foreign_dirt_short_circuits_with_sync_error():
+    """Any dirty path outside `.dolios/metrics/` blocks the sync."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "status --porcelain": (0, " M services/coder/tick.py\n", ""),
+            "backlog.py":       (0, json.dumps({"kind": "empty"}), ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "sync_error"
+        assert "services/coder/tick.py" in record["error"]
+        assert not any("backlog.py" in " ".join(c) for c in tr._runner.calls)
+        assert not any("merge --ff-only" in " ".join(c) for c in tr._runner.calls)
+
+
+def test_sync_fetch_failure_short_circuits_with_sync_error():
+    """A failed `git fetch` is a fail-stop: the picker never runs."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tr = _make({
+            "--preflight-only": _preflight_ok(),
+            "git fetch":        (1, "", "fatal: unable to access 'origin'"),
+            "backlog.py":       (0, json.dumps({"kind": "empty"}), ""),
+        }, tmp)
+        record = tr.run_tick()
+        assert record["kind"] == "sync_error"
+        assert "fetch" in record["error"]
+        assert "fatal: unable to access" in record["error"]
+        assert not any("backlog.py" in " ".join(c) for c in tr._runner.calls)
+        assert not any("merge --ff-only" in " ".join(c) for c in tr._runner.calls)
+
+
+def test_sync_preserves_pending_audit_rows_across_ff():
+    """Dirty `.dolios/metrics/<repo>/history.jsonl` rows survive the sync:
+    the file is reset, ff-merged, and the local rows (by `audited_at`) that
+    aren't in the merged file are re-appended in order."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        metrics_dir = root / ".dolios" / "metrics" / "dolios"
+        metrics_dir.mkdir(parents=True)
+        history = metrics_dir / "history.jsonl"
+        # Pending local state: one row already shared with origin, two new.
+        shared = {"audited_at": "2026-06-01T00:00:00Z", "repo": "dolios", "n": 1}
+        new_a  = {"audited_at": "2026-06-02T00:00:00Z", "repo": "dolios", "n": 2}
+        new_b  = {"audited_at": "2026-06-03T00:00:00Z", "repo": "dolios", "n": 3}
+        history.write_text(
+            json.dumps(shared) + "\n"
+            + json.dumps(new_a) + "\n"
+            + json.dumps(new_b) + "\n"
+        )
+
+        # Fake a `git checkout --` that resets the file to the version in
+        # the merged tree: just `shared` is present. Our runner can't shell
+        # out, so simulate the checkout by writing the "HEAD" version.
+        class _CheckoutRunner(FakeRunner):
+            def __call__(self, cmd, cwd):
+                self.calls.append(cmd)
+                joined = " ".join(str(c) for c in cmd)
+                if "checkout" in cmd and "--" in cmd:
+                    # Any `git checkout -- <rel>` within the dolios root resets
+                    # the file to its HEAD version (here: just the shared row).
+                    rel = cmd[cmd.index("--") + 1]
+                    (Path(cwd) / rel).write_text(json.dumps(shared) + "\n")
+                    return 0, "", ""
+                for needle, resp in self.responses.items():
+                    if needle in joined or any(needle in arg for arg in cmd):
+                        return resp
+                return 0, "", ""
+
+        responses = {
+            "--preflight-only": _preflight_ok(),
+            "abbrev-ref":       (0, "main\n", ""),
+            "status --porcelain": (0, " M .dolios/metrics/dolios/history.jsonl\n", ""),
+            "git fetch":        (0, "", ""),
+            "ff-only":          (0, "", ""),
+            "rev-parse HEAD":   (0, "newhead\n", ""),
+            "backlog.py":       (0, json.dumps({"kind": "empty"}), ""),
+        }
+        tr = t.TickRunner(
+            root=root,
+            runner=_CheckoutRunner(responses),
+            log_path=root / "tick-log.jsonl",
+            now=lambda: 1_700_000_000.0,
+        )
+        record = tr.run_tick()
+        assert record["kind"] == "empty"
+        assert record["synced_to"] == "newhead"
+
+        # All three rows are back, in local order; `shared` appears exactly
+        # once (we skipped it on re-append because the merged file already had
+        # it).
+        rows = [json.loads(line) for line in history.read_text().splitlines()
+                if line.strip()]
+        assert rows == [shared, new_a, new_b]
 
 
 # --------------------------------------------------------------------------- #

@@ -63,7 +63,7 @@ fast-forwarded the checkout and closed the duplicates.
 
 ## Intervention
 
-- [ ] **Tick: fast-forward the dolios checkout before picking work.** In
+- [x] **Tick: fast-forward the dolios checkout before picking work.** In
   `services/coder/tick.py` `run_tick`, after a successful preflight and
   BEFORE running `backlog.py --next`, sync `self.root` to `origin/<base>`
   (base = `main`): `git fetch origin main`, then `git merge --ff-only

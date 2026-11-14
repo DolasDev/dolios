@@ -90,7 +90,7 @@ def failure_signature(row: dict) -> str | None:
         if any(m in reason for m in _NEUTRAL_HOLD_MARKERS):
             return None
         return "hold: " + _norm(reason)
-    if kind in ("preflight_error", "picker_error", "error"):
+    if kind in ("preflight_error", "picker_error", "sync_error", "error"):
         return f"{kind}: " + _norm(row.get("error") or "")
     if row.get("audit_rc") not in (None, 0):
         return "audit: " + _norm(_last_line(row.get("error") or ""))
