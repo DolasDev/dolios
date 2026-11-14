@@ -364,6 +364,83 @@ def audit_iac(repo: Path) -> dict:
     }
 
 
+# Loop-health ("ops") metrics — the autonomous-coder auditing its own loop.
+# Only present for a repo that hosts the coder's tick log (dolios itself).
+OPS_LOOKBACK_DAYS = 14
+OPS_REPEAT_MIN = 3
+# Changing any of these is how a loop fault gets fixed, so only failures
+# AFTER the latest commit here count: an ops gap means "still happening on
+# the current code" and clears by itself once a fix lands.
+OPS_CODE_PATHS = ("services/coder", "services/usage-gate", "infra/hermes",
+                  "employees")
+OPS_REPEAT_SUMMARY = "Autonomous-coder loop keeps hitting the same failure"
+OPS_DUPLICATE_SUMMARY = "Autonomous-coder loop opened duplicate PRs for one task"
+
+
+def _watchdog():
+    coder_dir = Path(__file__).resolve().parent.parent / "coder"
+    if str(coder_dir) not in sys.path:
+        sys.path.insert(0, str(coder_dir))
+    import watchdog
+    return watchdog
+
+
+def audit_ops(repo: Path, *, now: float | None = None) -> dict:
+    """Health of the autonomous-coder loop, from `.dolios/tick-log.jsonl`.
+
+    Counts only ticks inside the lookback window AND after the latest commit
+    to the loop's own code (`code_cutoff`). Reuses the watchdog's failure
+    classification so the pager and the auditor agree on what a failure is.
+    """
+    log = repo / ".dolios" / "tick-log.jsonl"
+    if not log.exists():
+        return {"present": False}
+    now = datetime.now(UTC).timestamp() if now is None else now
+    raw = _git(repo, "log", "-1", "--format=%ct", "--", *OPS_CODE_PATHS).strip()
+    code_cutoff = float(raw) if raw.isdigit() else 0.0
+    since = max(now - OPS_LOOKBACK_DAYS * 86400, code_cutoff)
+
+    rows = []
+    with log.open() as fh:
+        for line in fh:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if float(r.get("ts", 0)) > since:
+                rows.append(r)
+
+    wd = _watchdog()
+    counts: dict[str, int] = {}
+    for r in rows:
+        sig = wd.failure_signature(r)
+        if sig:
+            counts[sig] = counts.get(sig, 0) + 1
+    repeated = sorted(
+        ({"signature": s, "count": c} for s, c in counts.items()
+         if c >= OPS_REPEAT_MIN),
+        key=lambda d: (-d["count"], d["signature"]),
+    )[:5]
+
+    by_task: dict[str, set[str]] = {}
+    for r in rows:
+        ident = wd._task_identity(r)
+        if ident and r.get("pr_url") and not r.get("pr_closed"):
+            by_task.setdefault(ident, set()).add(r["pr_url"])
+    duplicates = [{"task": t, "prs": sorted(u)}
+                  for t, u in sorted(by_task.items()) if len(u) > 1]
+
+    return {
+        "present": True,
+        "lookback_days": OPS_LOOKBACK_DAYS,
+        "code_cutoff": _iso(code_cutoff) if code_cutoff else None,
+        "ticks": len(rows),
+        "failure_ticks": sum(counts.values()),
+        "repeated_failures": repeated,
+        "duplicate_pr_tasks": duplicates,
+    }
+
+
 def audit_repo_shape(repo: Path) -> dict:
     """Language mix + scale, for context on every other metric."""
     by_lang: dict[str, int] = {}
@@ -560,6 +637,65 @@ def derive_gaps(metrics: dict) -> list[dict]:
             ),
         })
 
+    # CI exists but isn't observed running on PRs — the gate auto-merge relies
+    # on. (May also be a measurement fault in ci_api; the proposal decides.)
+    if ci["github_actions_present"] and ci.get("test_runs_on_pr") is False:
+        gaps.append({
+            "area": "ci",
+            "severity": "medium",
+            "frameworks": ["DORA: Continuous Integration", "OpenSSF Scorecard: CI-Tests"],
+            "summary": "CI runs not observed on pull requests",
+            "detail": (
+                "ci.test_runs_on_pr is false: no pull_request-triggered workflow "
+                "runs found in the Actions API sample. Either CI doesn't gate PRs, "
+                "or the measurement misses them (see memory 0003 — runs filtered "
+                "by branch=main exclude PR-head runs)."
+            ),
+            "proposed_action": (
+                "Confirm whether workflows trigger on pull_request; fix the "
+                "trigger or the measurement so the metric reflects reality."
+            ),
+        })
+
+    ops = metrics.get("ops") or {}
+    if ops.get("repeated_failures"):
+        top = "; ".join(f"{d['count']}x {d['signature']}"
+                        for d in ops["repeated_failures"])
+        gaps.append({
+            "area": "ops",
+            "severity": "high",
+            "frameworks": ["SRE: Eliminating toil", "DORA: Monitoring and observability"],
+            "summary": OPS_REPEAT_SUMMARY,
+            "detail": (
+                f"Since the latest loop-code change ({ops.get('code_cutoff')}), "
+                f"the same failure recurred >= {OPS_REPEAT_MIN} times: {top}. "
+                "Source: .dolios/tick-log.jsonl (per-host)."
+            ),
+            "proposed_action": (
+                "Root-cause the most frequent failure signature in the coder's "
+                "own code (services/coder, usage-gate, cron wrappers) and fix it "
+                "so ticks either make progress or hold for a legitimate reason."
+            ),
+        })
+    if ops.get("duplicate_pr_tasks"):
+        dup = "; ".join(f"{d['task']} -> {', '.join(d['prs'])}"
+                        for d in ops["duplicate_pr_tasks"])
+        gaps.append({
+            "area": "ops",
+            "severity": "high",
+            "frameworks": ["SRE: Eliminating toil", "DORA: Working in small batches"],
+            "summary": OPS_DUPLICATE_SUMMARY,
+            "detail": (
+                f"Since the latest loop-code change ({ops.get('code_cutoff')}), "
+                f"one task produced several PRs: {dup}. The loop is acting on "
+                "stale state."
+            ),
+            "proposed_action": (
+                "Find why the picker re-selected work that already had a PR "
+                "(stale checkout, missing idempotency) and fix it in the loop."
+            ),
+        })
+
     # Stable order by severity then area, so audit diffs in PRs are readable.
     rank = {"high": 0, "medium": 1, "low": 2}
     gaps.sort(key=lambda g: (rank.get(g["severity"], 9), g["area"]))
@@ -588,6 +724,7 @@ def run(
         "dependencies": audit_dependencies(repo),
         "iac": audit_iac(repo),
         "shape": audit_repo_shape(repo),
+        "ops": audit_ops(repo),
     }
     # When the GH Actions API half returned real numbers, drop the ci.* rows
     # from `not_measured` — they've graduated.
