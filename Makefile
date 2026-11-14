@@ -82,7 +82,10 @@ coder-preflight:
 	@python3 services/coder/dispatch.py --preflight-only
 
 coder-test:
-	@cd services/coder && python3 test_dispatch.py
+	@cd services/coder && rc=0; for t in test_*.py; do \
+	  echo "== $$t"; python3 $$t | tail -1; \
+	  python3 $$t >/dev/null 2>&1 || rc=1; \
+	done; exit $$rc
 
 # Repo health audit — the deterministic half of the discovery loop. Appends a
 # snapshot to .dolios/metrics/dolios/history.jsonl. See services/auditor/ and
@@ -162,8 +165,15 @@ install-coder-cron:
 	@mkdir -p $(HOME)/.hermes/profiles/autonomous-coder/scripts
 	@install -m 0755 infra/hermes/scripts/dolios-tick.sh \
 	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh
+	@install -m 0755 infra/hermes/scripts/dolios-watchdog.sh \
+	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-watchdog.sh
 	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh"
+	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-watchdog.sh"
 	@echo "Now register the cron from inside the container:"
 	@echo "  docker compose exec --user hermes hermes-autonomous-coder hermes -p autonomous-coder cron create \\"
 	@echo "    '0,30 3-11 * * *' --no-agent --script dolios-tick.sh \\"
 	@echo "    --name dolios-coder-loop --workdir /opt/data/repos/dolios"
+	@echo "and the hourly watchdog (pages over Matrix when the loop is stuck):"
+	@echo "  docker compose exec --user hermes hermes-autonomous-coder hermes -p autonomous-coder cron create \\"
+	@echo "    '15 * * * *' --no-agent --script dolios-watchdog.sh \\"
+	@echo "    --name dolios-coder-watchdog --workdir /opt/data/repos/dolios"
