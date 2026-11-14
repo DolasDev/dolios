@@ -186,6 +186,15 @@ def test_pr_number_from_url():
 # --------------------------------------------------------------------------- #
 # Standalone runner
 # --------------------------------------------------------------------------- #
+def test_protected_files_matches_guardrail_paths_only():
+    files = ["services/coder/dispatch.py", "services/usage-gate/usage_gate.py",
+             "infra/hermes/scripts/dolios-tick.sh", ".github/workflows/ci.yml",
+             "Makefile", "proposals/README.md",
+             "infra/hermes/memories/0003-x.md", "proposals/dolios/p.md",
+             "services/auditor/ci_api.py", "README.md"]
+    assert r.protected_files(files) == files[:6]
+
+
 def _run_standalone():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

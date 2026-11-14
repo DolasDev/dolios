@@ -70,6 +70,23 @@ def _review_and_act(pr_url: str | None, repo_path: Path, record: dict,
 
     decision = rev.get("decision")
     if decision == "approve":
+        # Protected paths (the loop's own guardrails) need a human merge.
+        # Unknown file list → fail closed.
+        files = _rv.pr_changed_files(pr_url, repo_path, runner=runner)
+        held = ["<could not list PR files>"] if files is None \
+            else _rv.protected_files(files)
+        if held:
+            record["merge_held"] = held
+            _rv.comment_pr(pr_url, repo_path, (
+                "Auto-reviewer **approved**, but this PR touches protected "
+                "paths, so auto-merge was NOT queued — needs a human merge.\n\n"
+                + "\n".join(f"- `{p}`" for p in held)
+                + f"\n\nReviewer: {rev.get('reasoning', '')}"
+            ), runner=runner)
+            _notify(f"[dolios-coder] needs your merge: {pr_url} touches "
+                    f"protected paths ({', '.join(held[:5])}). Reviewer "
+                    f"approved: {rev.get('reasoning', '')[:300]}")
+            return
         merge_res = _rv.enable_auto_merge(pr_url, repo_path, runner=runner)
         record["merge_queued"] = bool(merge_res.get("queued"))
         if not merge_res.get("ok"):
@@ -87,6 +104,19 @@ def _review_and_act(pr_url: str | None, repo_path: Path, record: dict,
             record["close_error"] = close_res.get("error", "")
     # For abstain / request_changes: leave the PR open. Humans can review,
     # or a future tick may re-review after rebase / CI signal.
+
+
+def _notify(text: str) -> None:
+    """Best-effort one-shot Matrix message (same channel as the watchdog).
+    Silently a no-op when Matrix isn't configured (tests, host runs)."""
+    try:
+        sys.path.insert(0, str(HERE))
+        import watchdog as _wd
+        send = _wd.matrix_sender_from_env()
+        if send:
+            send(text)
+    except Exception:  # noqa: BLE001 — never break the tick over a ping
+        pass
 
 
 def _extract_frontmatter_field(markdown_text: str, key: str) -> str | None:

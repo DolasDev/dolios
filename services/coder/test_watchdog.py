@@ -54,6 +54,14 @@ def test_successful_pr_tick_is_healthy():
     assert w.failure_signature(pr_row(T0, "b", "u")) is None
 
 
+def test_open_chunk_pr_awaiting_human_is_waiting_not_failing():
+    row = {"kind": "execute", "dispatch_rc": 1, "dispatch_error":
+           "chunk already has a OPEN PR #31 on branch 'auto/coder/x': u"}
+    assert w.failure_signature(row) is None
+    merged = dict(row, dispatch_error=row["dispatch_error"].replace("OPEN", "MERGED"))
+    assert w.failure_signature(merged) is not None
+
+
 # -- checks ---------------------------------------------------------------- #
 def test_repeat_fires_after_three_identical_failures():
     rows = [audit_ok(T0)] + [hold(T0 + i * H, TOKEN_HOLD) for i in range(1, 4)]
