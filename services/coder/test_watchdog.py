@@ -5,11 +5,17 @@ network. Runs under pytest or standalone: `python3 test_watchdog.py`."""
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
 import watchdog as w
+
+# Belt-and-braces: no test may reach a real Matrix room (the container's
+# profile .env sets these). Every test injects its own sender anyway.
+for _k in ("MATRIX_HOMESERVER", "MATRIX_ACCESS_TOKEN", "MATRIX_ALERT_ROOM"):
+    os.environ.pop(_k, None)
 
 H = 3600.0
 T0 = 1_800_000_000.0

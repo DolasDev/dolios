@@ -16,6 +16,12 @@ from pathlib import Path
 
 import tick as t
 
+# Never send real Matrix messages from tests: inside the hermes container the
+# profile .env provides MATRIX_* creds, so the coder's own `make coder-test`
+# runs would otherwise page the human with fake PRs. Capture instead.
+NOTIFIED: list[str] = []
+t._notify = NOTIFIED.append
+
 
 # --------------------------------------------------------------------------- #
 # Fake runner: maps command-substring → (rc, stdout, stderr)
@@ -279,6 +285,7 @@ def test_approved_pr_touching_protected_paths_is_held_for_a_human():
         assert not any("pr merge" in c for c in cmds)
         comment = next(c for c in cmds if "pr comment" in c)
         assert "services/coder/tick.py" in comment and "human merge" in comment
+        assert NOTIFIED and "needs your merge" in NOTIFIED[-1]
 
 
 def test_unlistable_pr_files_fail_closed():
