@@ -242,6 +242,62 @@ def test_review_approves_and_queues_auto_merge_after_successful_execute():
         assert diff_idx < merge_idx
 
 
+def _approve_tick(tmp, extra: dict):
+    job = {"kind": "execute", "repo": "dolios", "proposal_id": "dolios/p1",
+           "proposal_path": "proposals/dolios/p1.md", "chunk_index": 1,
+           "task_id": "dolios-p1-chunk-1", "instructions": "do it",
+           "rationale": ""}
+    dispatch_response = json.dumps({"ok": True, "record": {
+        "pr_url": "https://github.com/x/y/pull/42", "cost_usd": 0.6,
+        "chunk_flipped": True, "branch": "auto/coder/dolios-p1-chunk-1"}})
+    responses = {
+        "--preflight-only": _preflight_ok(),
+        "backlog.py":       (0, json.dumps(job), ""),
+        "--chunk-index":    (0, dispatch_response, ""),
+        **extra,  # earlier keys win in FakeRunner, so overrides go first below
+        "pr diff":          (0, "--- a\n+++ b\n+line\n", ""),
+        "pr view":          (0, json.dumps({"title": "x"}), ""),
+        "claude":           (0, json.dumps({
+            "result": '{"decision": "approve", "reasoning": "scope ok"}',
+            "total_cost_usd": 0.25}), ""),
+        "pr merge":         (0, "queued", ""),
+        "pr comment":       (0, "", ""),
+    }
+    tr = _make(responses, tmp)
+    return tr, tr.run_tick()
+
+
+def test_approved_pr_touching_protected_paths_is_held_for_a_human():
+    with tempfile.TemporaryDirectory() as tmp:
+        tr, record = _approve_tick(tmp, {
+            "--name-only": (0, "services/coder/tick.py\ndocs/x.md\n", ""),
+        })
+        assert record["review_decision"] == "approve"
+        assert record["merge_held"] == ["services/coder/tick.py"]
+        assert "merge_queued" not in record
+        cmds = [" ".join(c) for c in tr._runner.calls]
+        assert not any("pr merge" in c for c in cmds)
+        comment = next(c for c in cmds if "pr comment" in c)
+        assert "services/coder/tick.py" in comment and "human merge" in comment
+
+
+def test_unlistable_pr_files_fail_closed():
+    with tempfile.TemporaryDirectory() as tmp:
+        tr, record = _approve_tick(tmp, {"--name-only": (1, "", "gh: boom")})
+        assert record["merge_held"] == ["<could not list PR files>"]
+        assert not any("pr merge" in " ".join(c) for c in tr._runner.calls)
+
+
+def test_approved_pr_outside_protected_paths_still_auto_merges():
+    with tempfile.TemporaryDirectory() as tmp:
+        tr, record = _approve_tick(tmp, {
+            "--name-only": (0, "services/auditor/ci_api.py\n"
+                               "infra/hermes/memories/0005-x.md\n", ""),
+        })
+        assert record.get("merge_queued") is True
+        assert "merge_held" not in record
+
+
 def test_review_rejects_and_closes_pr_with_reasoning_comment():
     """Reject path: the PR gets closed via gh, with the reviewer's
     reasoning posted as a comment. No auto-merge call."""

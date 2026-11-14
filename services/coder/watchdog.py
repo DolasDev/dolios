@@ -95,6 +95,11 @@ def failure_signature(row: dict) -> str | None:
     if row.get("audit_rc") not in (None, 0):
         return "audit: " + _norm(_last_line(row.get("error") or ""))
     if row.get("dispatch_rc") not in (None, 0):
+        # Chunk PR open and awaiting a human merge (protected paths): the
+        # dispatcher's idempotency guard refuses re-dispatch. That's waiting,
+        # not failing — the "needs your merge" ping already went out.
+        if "already has a OPEN PR" in (row.get("dispatch_error") or ""):
+            return None
         return f"{kind}: " + _norm(_last_line(row.get("dispatch_error") or "")
                                     or f"dispatch rc={row.get('dispatch_rc')}")
     if kind in ("propose", "remeasure", "reflect") and row.get("error"):

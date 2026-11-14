@@ -26,6 +26,62 @@ from pathlib import Path
 Runner = Callable[[list[str], Path], "tuple[int, str, str]"]
 
 
+# Paths whose changes need a HUMAN merge even when the auto-reviewer approves.
+# These are the loop's own guardrails and plumbing: letting an LLM-authored,
+# LLM-reviewed PR auto-merge here would let the coder loosen its own controls
+# (dispatcher guardrails, gate, reviewer, cron env, CI that gates auto-merge,
+# the proposal process). The reviewer still reviews; tick.py just doesn't queue
+# auto-merge and pings the human instead. NOT protected on purpose:
+# infra/hermes/memories/ + skills/ (the coder's sanctioned write surface),
+# proposals/<repo>/ (merged proposals stay `proposed` until a human approves).
+PROTECTED_PATH_PREFIXES = (
+    "services/coder/",
+    "services/usage-gate/",
+    "infra/hermes/scripts/",
+    "infra/hermes/hooks/",
+    "infra/hermes/cont-init.d/",
+    "infra/hermes/Dockerfile",
+    "employees/",
+    ".github/",
+    "Makefile",
+    "docker-compose.yml",
+    "proposals/README.md",
+    "proposals/_template.md",
+)
+
+
+def protected_files(paths: list[str]) -> list[str]:
+    return [p for p in paths if p.startswith(PROTECTED_PATH_PREFIXES)]
+
+
+def pr_changed_files(pr_url: str, repo_path: Path,
+                     runner: Runner | None = None) -> list[str] | None:
+    """Files a PR touches, or None if they can't be determined (callers must
+    treat None as protected — fail closed)."""
+    runner = runner or _real_runner
+    pr_number = _pr_number_from_url(pr_url)
+    if not pr_number:
+        return None
+    rc, out, _err = runner(["gh", "pr", "diff", pr_number, "--name-only"],
+                           repo_path)
+    if rc != 0:
+        return None
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def comment_pr(pr_url: str, repo_path: Path, body: str,
+               runner: Runner | None = None) -> dict:
+    runner = runner or _real_runner
+    pr_number = _pr_number_from_url(pr_url)
+    if not pr_number:
+        return {"ok": False, "error": f"no pr number in {pr_url}"}
+    rc, out, err = runner(["gh", "pr", "comment", pr_number, "--body", body],
+                          repo_path)
+    if rc != 0:
+        return {"ok": False, "error": (err or out).strip()[:300]}
+    return {"ok": True}
+
+
 def _real_runner(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
     r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
     return r.returncode, r.stdout, r.stderr
