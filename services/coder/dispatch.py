@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import subprocess
@@ -37,6 +38,36 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Runtime state the fleet writes into the dolios checkout itself (audit ticks
+# append to `.dolios/metrics/<repo>/history.jsonl`). When the coder targets
+# dolios, these would otherwise dirty the tree and block every dispatch. Dirty
+# files under these prefixes don't block a run, and are left OUT of the work
+# commit unless the run itself changed them (remeasure legitimately does).
+EXEMPT_DIRTY_PREFIXES = (".dolios/metrics/",)
+
+
+def _porcelain_paths(status: str) -> list[str]:
+    """Paths from `git status --porcelain` output (rename → new path)."""
+    paths = []
+    for line in status.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:].split(" -> ")[-1].strip().strip('"')
+        paths.append(path)
+    return paths
+
+
+def _is_exempt(path: str) -> bool:
+    return path.startswith(EXEMPT_DIRTY_PREFIXES)
+
+
+def _file_digest(repo_path: str, rel: str) -> str | None:
+    try:
+        with open(os.path.join(repo_path, rel), "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return None
 
 
 class GuardrailError(RuntimeError):
@@ -279,9 +310,26 @@ class Dispatcher:
         git = self._git(repo_path)
 
         # Precondition: clean tree, so we never entangle the coder's work with
-        # pre-existing uncommitted changes.
-        if git("status", "--porcelain").strip():
-            raise GuardrailError("working tree is not clean; refusing to start")
+        # pre-existing uncommitted changes. Fleet runtime state under
+        # EXEMPT_DIRTY_PREFIXES is tolerated; we snapshot it so it can be kept
+        # out of the commit unless this run changes it.
+        def status_paths() -> list[str]:
+            return _porcelain_paths(
+                git("status", "--porcelain", "--untracked-files=all"))
+
+        pre_paths = status_paths()
+        blocking = [p for p in pre_paths if not _is_exempt(p)]
+        if blocking:
+            raise GuardrailError(
+                f"working tree is not clean; refusing to start: {blocking[:10]}")
+        pre_exempt = {p: _file_digest(repo_path, p) for p in pre_paths}
+
+        def changed_paths() -> list[str]:
+            """Dirty paths attributable to this run (excludes untouched
+            pre-existing exempt state)."""
+            return [p for p in status_paths()
+                    if p not in pre_exempt
+                    or _file_digest(repo_path, p) != pre_exempt[p]]
 
         base = self.cfg.base_branch
         chunk_mode = proposal_path is not None and chunk_index is not None
@@ -352,7 +400,7 @@ class Dispatcher:
             # implementation. The flip itself counts as a tree change, so we
             # have to check BEFORE.
             if chunk_mode:
-                if not git("status", "--porcelain").strip():
+                if not changed_paths():
                     raise GuardrailError(
                         "claude made no changes in chunk mode — refusing to "
                         f"flip the chunk-{chunk_index} checkbox (claude "
@@ -363,8 +411,13 @@ class Dispatcher:
                 chunk_flipped = True
 
             # Commit whatever Claude Code changed (on the work branch only).
+            run_changes = changed_paths()
             git("add", "-A")
-            committed = bool(git("status", "--porcelain").strip())
+            # Un-stage pre-existing exempt state this run didn't touch.
+            for p in pre_exempt:
+                if p not in run_changes:
+                    git("reset", "-q", "--", p)
+            committed = bool(run_changes)
             if committed:
                 commit_msg = f"auto-coder: {task_id}"
                 if chunk_mode:
@@ -395,11 +448,14 @@ class Dispatcher:
                 "chunk_flipped": chunk_flipped,
             }
             self._append_ledger(record)
-            # Best-effort HEAD reset. Skip the checkout when the tree isn't
-            # clean (would fail noisily) — uncommitted state is rare, and the
-            # operator can review/discard it manually.
+            # Best-effort HEAD reset. Skip the checkout when the tree has
+            # non-exempt dirt (would fail noisily) — uncommitted state is
+            # rare, and the operator can review/discard it manually. Exempt
+            # runtime state rides along (the work commit didn't touch it).
             try:
-                if not self.r.git(["status", "--porcelain"], repo_path).strip():
+                left = _porcelain_paths(self.r.git(
+                    ["status", "--porcelain", "--untracked-files=all"], repo_path))
+                if not [p for p in left if not _is_exempt(p)]:
                     self.r.git(["checkout", base], repo_path)
             except Exception:
                 pass  # don't double-fault during cleanup

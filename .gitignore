@@ -46,3 +46,7 @@ Thumbs.db
 # memsearch local index state (machine-specific)
 .memsearch/.index-state.json
 .memsearch/.index.pid
+
+# autonomous-coder tick log — per-host runtime state, appended every cron tick.
+# Tracking it dirtied the tree the coder itself requires clean (dispatch.py).
+.dolios/tick-log.jsonl
