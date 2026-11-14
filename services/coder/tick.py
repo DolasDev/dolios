@@ -476,6 +476,18 @@ def main(argv: list[str] | None = None) -> int:
     record = runner.run_tick()
     print(json.dumps(record, indent=2))
 
+    # Loop watchdog: page a human if the loop is stuck or misbehaving. The
+    # stale check is left to the independent hourly watchdog cron — this tick
+    # just logged, so it can't judge staleness. Never let it break the tick.
+    try:
+        sys.path.insert(0, str(HERE))
+        import watchdog as _wd
+        wd = _wd.run(log_path=runner.log_path, check_stale=False)
+        if wd.get("messages"):
+            print(json.dumps({"watchdog": wd}, indent=2), file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"watchdog failed: {exc}", file=sys.stderr)
+
     if record["kind"] in ("preflight_error", "picker_error", "error"):
         return 2
     if record.get("dispatch_rc", 0) != 0 or record.get("audit_rc", 0) != 0:

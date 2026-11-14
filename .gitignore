@@ -50,3 +50,5 @@ Thumbs.db
 # autonomous-coder tick log — per-host runtime state, appended every cron tick.
 # Tracking it dirtied the tree the coder itself requires clean (dispatch.py).
 .dolios/tick-log.jsonl
+# loop watchdog alert-dedupe state (services/coder/watchdog.py)
+.dolios/watchdog-state.json
