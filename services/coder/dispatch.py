@@ -341,6 +341,22 @@ class Dispatcher:
             ts = datetime.datetime.fromtimestamp(self.r.now()).strftime("%Y%m%d-%H%M%S")
             branch = f"{self.cfg.branch_prefix}/{task_id}-{ts}"
 
+        # Sync target's base to origin/<base> BEFORE branching off it —
+        # never branch from a stale base, or we'll re-propose already-merged
+        # work (ops.duplicate_pr_tasks). If HEAD isn't on base, swap first;
+        # the clean-tree check already ran, so this is safe.
+        try:
+            head = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+            if head != base:
+                git("checkout", base)
+            git("fetch", "origin", base)
+            git("merge", "--ff-only", f"origin/{base}")
+        except subprocess.CalledProcessError as exc:
+            stderr = (getattr(exc, "stderr", "") or "").strip()
+            raise GuardrailError(
+                f"failed to sync {base} from origin before branching: {stderr}"
+            ) from exc
+
         # Branch OFF base; we never commit onto base itself.
         git("checkout", "-b", branch, base)
 

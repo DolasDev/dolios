@@ -10,6 +10,7 @@ open a PR, never merge. Runs under pytest or standalone:
 
 import json
 import os
+import subprocess
 import tempfile
 
 import dispatch as d
@@ -19,12 +20,17 @@ class FakeRepo:
     """Stateful fake backing the git/claude/gh runners."""
 
     def __init__(self, *, initial_dirty=False, claude_changes=True,
-                 cost=0.5, checkout_works=True):
+                 cost=0.5, checkout_works=True,
+                 fail_sync_fetch=False, fail_sync_ff=False):
         self.branch = "main"
         self.initial_dirty = initial_dirty
         self.claude_changes = claude_changes
         self.cost = cost
         self.checkout_works = checkout_works
+        # Simulate `git fetch origin <base>` / `git merge --ff-only` failing —
+        # mirrors how `_real_git` surfaces it (CalledProcessError, stderr set).
+        self.fail_sync_fetch = fail_sync_fetch
+        self.fail_sync_ff = fail_sync_ff
         self.claude_ran = False
         self.git_calls = []
         self.gh_calls = []
@@ -45,11 +51,26 @@ class FakeRepo:
                 if self.checkout_works:
                     self.branch = args[2]
             elif len(args) >= 2:
-                # `git checkout <branch>` — used by the cleanup HEAD reset.
+                # `git checkout <branch>` — used by the cleanup HEAD reset
+                # and by the pre-branch sync when HEAD isn't on base.
                 self.branch = args[1]
             return ""
         if args[:1] == ["rev-parse"]:
             return self.branch + "\n"
+        if args[:2] == ["fetch", "origin"]:
+            if self.fail_sync_fetch:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=["git", *args], output="",
+                    stderr="fatal: could not fetch origin\n",
+                )
+            return ""
+        if args[:2] == ["merge", "--ff-only"]:
+            if self.fail_sync_ff:
+                raise subprocess.CalledProcessError(
+                    returncode=1, cmd=["git", *args], output="",
+                    stderr="fatal: Not possible to fast-forward, aborting.\n",
+                )
+            return ""
         if args and args[0] == "commit":
             self.committed = True
             return ""
@@ -273,6 +294,40 @@ def test_happy_path_branches_runs_and_opens_pr():
         # ledger recorded the spend
         with open(disp.cfg.budget.ledger_path) as fh:
             assert json.loads(fh.readline())["cost_usd"] == 0.5
+
+
+def test_sync_fetches_and_ff_merges_before_checkout_b():
+    """Before `git checkout -b`, the dispatcher must fetch origin/<base> and
+    ff-merge it into the target repo's base — never branch from a stale base
+    (that's what spawned duplicate PRs; see 2026-11-14 sync-base proposal)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepo()
+        _, _, disp = make(tmp, repo)
+        disp.dispatch("dolios", "TASK-1", "fix the thing")
+        calls = repo.git_calls
+        fetch_idx    = next(i for i, c in enumerate(calls)
+                            if c[:2] == ["fetch", "origin"])
+        merge_idx    = next(i for i, c in enumerate(calls)
+                            if c[:2] == ["merge", "--ff-only"])
+        checkout_idx = next(i for i, c in enumerate(calls)
+                            if c[:2] == ["checkout", "-b"])
+        assert fetch_idx < merge_idx < checkout_idx
+        assert calls[fetch_idx] == ["fetch", "origin", "main"]
+        assert calls[merge_idx] == ["merge", "--ff-only", "origin/main"]
+
+
+def test_sync_failed_ff_aborts_before_claude_runs():
+    """A failed ff-only (base diverged, or fetch failed) must raise
+    GuardrailError with the git stderr and abort BEFORE claude is invoked —
+    better to skip a tick than branch from a stale base and duplicate work."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepo(fail_sync_ff=True)
+        _, _, disp = make(tmp, repo)
+        msg = _expect_guardrail(lambda: disp.dispatch("dolios", "T1", "x"))
+        assert "sync main from origin" in msg
+        assert "fast-forward" in msg  # the git stderr was carried through
+        assert not repo.claude_ran
+        assert not any(c[:2] == ["checkout", "-b"] for c in repo.git_calls)
 
 
 def test_never_moves_off_base_guardrail():
