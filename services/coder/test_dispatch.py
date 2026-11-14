@@ -35,7 +35,7 @@ class FakeRepo:
         self.git_calls.append(args)
         if args[:2] == ["status", "--porcelain"]:
             if not self.claude_ran:
-                return "M file\n" if self.initial_dirty else ""
+                return " M file\n" if self.initial_dirty else ""
             # After commit, working tree is clean (no further dirty status).
             if self.committed:
                 return ""
@@ -152,6 +152,87 @@ def test_dirty_tree_refused():
         msg = _expect_guardrail(lambda: disp.dispatch("dolios", "T1", "x"))
         assert "not clean" in msg
         assert not repo.claude_ran
+
+
+HIST = ".dolios/metrics/dolios/history.jsonl"
+
+
+class FakeRepoWithRuntimeState(FakeRepo):
+    """Tree carries uncommitted fleet runtime state (an audit row) before the
+    run starts. `claude_touches_history` simulates a remeasure run appending
+    to it; `claude_changes` controls whether claude edits anything else."""
+
+    def __init__(self, repo_path, *, claude_touches_history=False, **kw):
+        super().__init__(**kw)
+        self.repo_path = repo_path
+        self.claude_touches_history = claude_touches_history
+        self.resets = []
+        hist = os.path.join(repo_path, HIST)
+        os.makedirs(os.path.dirname(hist), exist_ok=True)
+        with open(hist, "w") as fh:
+            fh.write('{"row": "audit-tick"}\n')
+
+    def git(self, args, cwd):
+        self.git_calls.append(args)
+        if args[:2] == ["status", "--porcelain"]:
+            lines = [f" M {HIST}"]
+            if self.claude_ran and self.claude_changes and not self.committed:
+                lines.append(" M changed.py")
+            return "\n".join(lines) + "\n"
+        if args and args[0] == "reset":
+            self.resets.append(args[-1])
+            return ""
+        self.git_calls.pop()
+        return super().git(args, cwd)
+
+    def claude(self, instructions, cwd):
+        out = super().claude(instructions, cwd)
+        if self.claude_touches_history:
+            with open(os.path.join(self.repo_path, HIST), "a") as fh:
+                fh.write('{"row": "remeasure"}\n')
+        return out
+
+
+def test_runtime_state_does_not_block_and_stays_out_of_commit():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepoWithRuntimeState(os.path.join(tmp, "repo"))
+        _, _, disp = make(tmp, repo)
+        rec = disp.dispatch("dolios", "T1", "x")
+        assert repo.claude_ran and repo.committed and rec["pr_url"]
+        # untouched audit row was un-staged → not part of the work commit
+        assert repo.resets == [HIST]
+        # cleanup still returned HEAD to base despite the leftover state
+        assert repo.branch == "main"
+
+
+def test_runtime_state_alone_is_not_a_change():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepoWithRuntimeState(os.path.join(tmp, "repo"),
+                                        claude_changes=False)
+        _, _, disp = make(tmp, repo)
+        rec = disp.dispatch("dolios", "T1", "x")
+        assert repo.claude_ran
+        assert not repo.committed and not rec["committed"] and not rec["pr_url"]
+
+
+def test_runtime_state_changed_by_run_is_committed():
+    """remeasure appends to history.jsonl itself — that must ship."""
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepoWithRuntimeState(os.path.join(tmp, "repo"),
+                                        claude_changes=False,
+                                        claude_touches_history=True)
+        _, _, disp = make(tmp, repo)
+        rec = disp.dispatch("dolios", "T1", "x")
+        assert repo.committed and rec["pr_url"]
+        assert repo.resets == []
+
+
+def test_non_runtime_dirt_still_blocks_and_is_named():
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = FakeRepo(initial_dirty=True)
+        _, _, disp = make(tmp, repo)
+        msg = _expect_guardrail(lambda: disp.dispatch("dolios", "T1", "x"))
+        assert "not clean" in msg and "file" in msg
 
 
 def test_budget_precheck_blocks():
