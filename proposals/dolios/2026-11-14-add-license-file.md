@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-11-14-add-license-file
-status: proposed
+status: approved
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L5@2026-11-14T09:00:59Z
 gap_ids:
@@ -10,17 +10,28 @@ metrics:
 frameworks:
   - "NIST SSDF: PO.1 — define the security & compliance requirements"
 opened:    2026-11-14
-approved:  null
+approved:  2026-11-14
 done:      null
 ---
 
-# Add an explicit LICENSE declaring Dolas LLC proprietary terms
+# Add an explicit Apache-2.0 LICENSE (Dolas LLC)
+
+> **Decision (human, 2026-11-14): Apache-2.0.** The draft below originally
+> picked a proprietary notice on the premise that `DolasDev/dolios` is a
+> *private* remote — it is **public**. A proprietary LICENSE on a public repo
+> adds little (unlicensed code is already all-rights-reserved by default) and
+> hides nothing; the repo is generic fleet tooling with nothing
+> business-sensitive in it, so an OSS license is the honest declaration.
+> Apache-2.0 over MIT for its explicit patent grant, the usual choice for a
+> company-owned repo. Business-specific code (e.g. the Phase 4 Pegasus
+> integration) belongs in a separate private repo. The Intervention and
+> Research sections are updated to match; the rest of the original
+> reasoning is kept for the record.
 
 ## Hypothesis
 
-Adding a top-level `LICENSE` file that explicitly declares the repository
-proprietary to **Dolas LLC** — i.e. all-rights-reserved with internal-use carve-outs
-for employees and agents working on behalf of the company — should move
+Adding a top-level `LICENSE` file containing the Apache License 2.0, with
+**Dolas LLC** as copyright holder, should move
 **`docs.license_present`** from **`false`** to **`true`** in the **next weekly
 audit cycle**, because NIST SSDF *PO.1* requires that the security & compliance
 requirements of a software product be *explicitly defined and documented*, and
@@ -73,49 +84,25 @@ proposal that had to flip measurement itself.
 
 One execution-PR-sized chunk. One file, ~15 lines.
 
-- [ ] **Add `LICENSE` at repo root declaring Dolas LLC proprietary terms.**
-   - Path: `LICENSE` (bare, no extension — matches both GitHub's "License"
-     detection UI and `audit_docs()`'s first branch).
-   - Content: a short proprietary / all-rights-reserved notice naming
-     **Dolas LLC** as copyright holder, the current year (2026) as the
-     copyright year, and an explicit internal-use carve-out for Dolas LLC
-     employees and automated agents (the autonomous-coder, future hermes
-     employees) working on behalf of the company. The goal is clarity for
-     any future contributor/auditor/outside reader about what rights they
-     do and do not have, not legal exotica.
-   - Suggested text (reviewer may swap any wording; the point is the
-     declaration, not this specific prose):
+- [ ] **Add `LICENSE` at repo root with the Apache License 2.0 text.**
+   - Path: `LICENSE` (bare, no extension — matches both GitHub's license
+     detection and `audit_docs()`'s first branch).
+   - Content: the **verbatim, unmodified** Apache License 2.0 text as
+     published at https://www.apache.org/licenses/LICENSE-2.0.txt (fetch it;
+     do not retype or paraphrase it), including the trailing "APPENDIX: How
+     to apply the Apache License to your work" section exactly as published.
+     Do not fill in the appendix's placeholder — the copyright line goes in
+     `NOTICE`, not in the license text, so GitHub detects it as plain
+     `Apache-2.0`.
+   - Also add a root `NOTICE` file containing exactly:
 
      ```
-     Copyright (c) 2026 Dolas LLC. All rights reserved.
-
-     This repository and its contents are proprietary to Dolas LLC.
-
-     No license is granted to use, copy, modify, merge, publish, distribute,
-     sublicense, or sell copies of the Software, except that Dolas LLC
-     employees and automated agents operating on behalf of Dolas LLC
-     (including the autonomous-coder and future hermes-agent profiles
-     specified in this repository) are authorized to do so in the course of
-     their work for Dolas LLC.
-
-     The Software is provided "as is", without warranty of any kind, express
-     or implied, including but not limited to the warranties of
-     merchantability, fitness for a particular purpose, and
-     noninfringement.
+     dolios
+     Copyright 2026 Dolas LLC
      ```
 
-   - **Decision point for the reviewer.** If Dolas LLC's actual intent is
-     open-source (Apache-2.0 for patent-grant coverage, MIT for maximal
-     permissiveness), swap the file contents to the SPDX-identified text
-     for that license in the same PR before merging — the metric flips
-     regardless, and the only cost is reviewer time choosing. Default to
-     proprietary because the signals (private GitHub remote
-     `DolasDev/dolios`, commercial Pegasus SaaS backing, LLC-named operator
-     email, no existing OSS declarations anywhere in the tree) point that
-     direction; file-opening the proposal author's choice rather than
-     deferring avoids an empty-shell PR.
-   - No code changes outside the new `LICENSE` file. No frontmatter / tool /
-     dependency changes; no runtime surface touched.
+   - No other files. No source headers, no frontmatter / tool / dependency
+     changes; no runtime surface touched.
 
 ## Measurement plan
 
@@ -183,29 +170,19 @@ choosealicense.com directories for each.
   copyright default, this already means "all rights reserved" — but the
   NIST SSDF PO.1 requirement is that the terms be *documented*, not merely
   defaulted-to. The gap exists precisely because implicit ≠ documented.
-- **Picked:** **Proprietary / all-rights-reserved** with an explicit
-  internal-use carve-out for Dolas LLC employees and automated agents.
-  Rationale: the repo's actual state — private GitHub remote
-  (`DolasDev/dolios`), LLC-owned commercial-product backing (Pegasus),
-  operator email under the LLC, no public distribution — is already
-  proprietary; a `LICENSE` that says so is the honest documentation that
-  PO.1 asks for. The internal-use carve-out is non-cosmetic: without it,
-  the autonomous-coder's own commits arguably lack a written permission
-  to modify the Software, which is the very "ambiguous reuse posture" the
-  gap flags.
-
-  SPDX identifier: for all-rights-reserved proprietary notices there is no
-  standard SPDX short-form; `LicenseRef-DolasLLC-Proprietary` would be the
-  SPDX-conformant custom id if any dependency consumer needs one later.
-  Out of scope for this PR; file as a follow-up if/when `pyproject.toml`
-  grows a `license` field.
+- **Picked (human decision, 2026-11-14):** **Apache-2.0**, copyright Dolas
+  LLC, with a `NOTICE` file. The draft's proprietary pick rested on the
+  remote being private; it is public, so an OSS declaration is the one that
+  actually matches the repo's posture, and the patent grant is the reason to
+  prefer it over MIT. SPDX identifier: `Apache-2.0`.
 
 ## Effort & risk
 
 - **Effort:** **1 PR, ~15 minutes of dispatcher time.** One new file, ~15
   lines, no tests to write (the auditor's existing filesystem check is
   the test), no runtime surface touched, no CI matrix to adjust.
-- **Risk — wrong license choice.** Proprietary might not match Dolas LLC's
+- **Risk — wrong license choice.** *(Superseded: the human chose Apache-2.0.)*
+  Proprietary might not match Dolas LLC's
   actual intent; a later decision to open-source the fleet-management
   pieces would then require a second PR to swap the LICENSE. **Mitigation:**
   the chunk's description explicitly flags this as a reviewer decision
