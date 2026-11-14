@@ -1,0 +1,142 @@
+---
+id:     dolios/2026-11-14-sync-base-before-picking-work
+status: approved
+repo:   dolios
+audit:  .dolios/metrics/dolios/history.jsonl#L5@2026-11-14T09:00:59Z
+gap_ids:
+  - ops-3e9ea57d89
+metrics:
+  - ops.duplicate_pr_tasks
+  - ops.repeated_failures            # guard
+frameworks:
+  - "SRE: Eliminating toil"
+  - "DORA: Working in small batches"
+  - "DORA: Monitoring and observability"
+opened:    2026-11-14
+approved:  2026-11-14
+done:      null
+---
+
+# Sync the base branch before every tick acts (stop acting on stale state)
+
+> Hand-written by a human-supervised session as the loop's first
+> **self-repair** proposal: the bug is in the coder's own loop, and the
+> coder implements the fix. Both chunks touch protected paths
+> (`services/coder/`), so each execution PR is auto-reviewed but waits for a
+> human merge.
+
+## Hypothesis
+
+> Fast-forwarding the dolios checkout (and each target repo) to `origin/main`
+> before the picker reads state and before the dispatcher branches should
+> move **`ops.duplicate_pr_tasks`** from **2 tasks** (observed 2026-11-14) to
+> **`[]`** over the next 14 days of ticks, because every duplicate observed so
+> far came from the picker reading a checkout that hadn't pulled the PR the
+> loop itself had just auto-merged.
+
+## Audit citation
+
+- **Audit row:** `.dolios/metrics/dolios/history.jsonl` line 5
+  (`audited_at: 2026-11-14T09:00:59Z`). That row predates the `ops` metric
+  (added in #26), so the baseline below comes from the tick log the metric
+  is computed from.
+- **Gap targeted:** `ops` / `Autonomous-coder loop opened duplicate PRs for
+  one task` (severity: `high`, `gap_id: ops-3e9ea57d89`).
+- **Frameworks:** SRE "Eliminating toil" — every duplicate is a manual
+  close-and-clean-up for a human; DORA "Working in small batches" — duplicate
+  in-flight PRs for one change defeat small, independent batches.
+
+## Baseline
+
+| Metric | Current | Source |
+|---|---|---|
+| `ops.duplicate_pr_tasks` | 2 tasks: `remeasure-…-adopt-github-actions-ci` → #19, #20; `propose-compliance-f6003ab812` → #21, #22, #23 | `.dolios/tick-log.jsonl`, 2026-11-14 09:00–11:30Z |
+| `ops.repeated_failures` (guard) | `[]` since the latest loop-code commit | audit `metrics.ops` |
+
+Mechanism (verified by hand on 2026-11-14): the loop auto-merges its PRs on
+GitHub but never pulls them into its own checkout
+(`/opt/data/repos/dolios`, bind-mounted from the host). After #19 merged,
+the checkout still read the CI proposal as `status: approved`, so the 10:00Z
+tick remeasured again (#20). After #21 merged, the gap still looked
+uncovered, so 11:00Z and 11:30Z proposed it again (#22, #23). A human
+fast-forwarded the checkout and closed the duplicates.
+
+## Intervention
+
+- [ ] **Tick: fast-forward the dolios checkout before picking work.** In
+  `services/coder/tick.py` `run_tick`, after a successful preflight and
+  BEFORE running `backlog.py --next`, sync `self.root` to `origin/<base>`
+  (base = `main`): `git fetch origin main`, then `git merge --ff-only
+  origin/main`, all through `self._runner` so tests can fake it. Preconditions
+  and failure handling: if HEAD is not `main`, or the tree has dirty paths
+  OTHER than under `.dolios/metrics/` (reuse the exemption idea from
+  `dispatch.EXEMPT_DIRTY_PREFIXES`), or the fetch/merge fails, do NOT pick
+  work — log the tick as `kind: "sync_error"` with an `error` field and
+  return (the watchdog pages on repeats). Pending local audit rows: dirty
+  `.dolios/metrics/<repo>/history.jsonl` files would block the ff-merge, so
+  before merging read each such file, `git checkout --` it, ff-merge, then
+  re-append every local row whose `audited_at` is not already present in the
+  updated file (order preserved). Record `synced_to` (the new HEAD sha) in the
+  tick record on success. Add tests in `services/coder/test_tick.py` for:
+  clean ff, not-on-main → sync_error, foreign dirt → sync_error, fetch failure
+  → sync_error, and pending audit rows preserved across the sync. Keep
+  `make coder-test` and `ruff check services/` green.
+- [ ] **Dispatch: branch from an up-to-date base in every target repo.** In
+  `services/coder/dispatch.py` `dispatch()`, after the clean-tree check and
+  before `git checkout -b <branch> <base>`, run `git fetch origin <base>` and
+  `git merge --ff-only origin/<base>` in the target repo (only when HEAD is
+  `<base>`; if HEAD is elsewhere, `git checkout <base>` first). A failure
+  raises `GuardrailError` with the git stderr — never branch from a stale
+  base. Extend `FakeRepo` in `services/coder/test_dispatch.py` to accept the
+  new commands, and add tests: the fetch + ff happen before `checkout -b`, and
+  a failed ff aborts before claude runs. Keep `make coder-test` and
+  `ruff check services/` green.
+
+## Measurement plan
+
+- **Metric(s) to watch:** `ops.duplicate_pr_tasks` (target `[]`); guard
+  `ops.repeated_failures` (a sync that keeps failing would show up here and
+  in the watchdog as a repeated `sync_error`).
+- **Sampling cadence:** every audit (weekly) — `ops` only counts ticks after
+  the latest loop-code commit, so the window starts at the merge of the last
+  chunk.
+- **Success threshold:** `ops.duplicate_pr_tasks == []` with at least 3
+  auto-merged agent PRs inside the measured window (otherwise there was
+  nothing to go stale, and the result is inconclusive, not met).
+- **When to call it:** at remeasure; if fewer than 3 merges have happened,
+  record "inconclusive" and let the next audit decide.
+- **What would falsify it:** any duplicate after both chunks merge → the
+  staleness has another source (e.g. a merge landing mid-tick); iterate with
+  a follow-up proposal.
+
+## Research / prior art
+
+- **Considered:** periodic `git pull` from a separate cron — racy with a
+  running tick and duplicates scheduling; rejected.
+- **Considered:** having the picker query GitHub (`gh pr list`) for in-flight
+  work instead of trusting the checkout — useful as a second guard, but the
+  checkout must be current anyway (proposals, chunk boxes and code all live
+  in it); deferred.
+- **Picked:** fetch + `--ff-only` at the two points that read state or create
+  branches. `--ff-only` never creates merge commits or rewrites history, and
+  refuses (loudly) when the checkout has diverged — the right failure mode
+  for an unattended loop.
+
+## Effort & risk
+
+- **Effort:** two small execution PRs, ~5–10 min dispatcher time each, plus a
+  human merge each (protected paths).
+- **Risk — self-update mid-flight:** the dolios checkout is also the loop's
+  code; a fast-forward can change `tick.py`/`dispatch.py` on disk. Python has
+  already loaded the running modules, and subprocesses spawned after the sync
+  run the new code — acceptable, and it is how merged loop fixes deploy.
+- **Risk — the first merge doesn't sync itself:** after chunk 1's PR merges,
+  the checkout is still stale until something pulls it once. **Mitigation:**
+  the human merging chunk 1 runs `git -C ~/repos/dolios pull --ff-only` on
+  dolo-docker once; from then on the loop syncs itself.
+- **Risk — losing pending audit rows** on sync. **Mitigation:** chunk 1's
+  re-append step + its test.
+
+## Outcome
+
+> *TBD — appended after the re-measure step.*
