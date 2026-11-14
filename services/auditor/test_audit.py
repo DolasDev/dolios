@@ -288,6 +288,96 @@ def test_derive_gaps_adds_test_reliability_gap_below_threshold():
 
 
 # --------------------------------------------------------------------------- #
+# Loop-health ("ops") metrics + gaps
+# --------------------------------------------------------------------------- #
+def _clean_metrics(**over):
+    m = {
+        "ci": {"github_actions_present": True, "other_ci_detected": False},
+        "security": {"gitleaks_config_present": True,
+                     "regex_secret_finding_count": 0,
+                     "openssf_scorecard_present": True},
+        "docs": {"license_present": True, "security_md_present": True,
+                 "codeowners_present": True},
+        "testing": {"coverage_measured": True},
+        "dependencies": {"dependabot_config": True, "renovate_config": False},
+    }
+    m.update(over)
+    return m
+
+
+def _ops_repo(tmp, rows):
+    repo = Path(tmp)
+    _init_git(repo, commits=[("services/coder/tick.py", "x\n")])  # 1 day ago
+    (repo / ".dolios").mkdir()
+    (repo / ".dolios" / "tick-log.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in rows))
+    return repo
+
+
+def _now():
+    return datetime.now(UTC).timestamp()
+
+
+def test_ops_absent_without_a_tick_log():
+    with tempfile.TemporaryDirectory() as tmp:
+        _init_git(Path(tmp), commits=[("a.py", "x\n")])
+        assert a.audit_ops(Path(tmp)) == {"present": False}
+
+
+def test_ops_counts_only_failures_after_the_latest_loop_code_commit():
+    now = _now()
+    fail = {"kind": "execute", "dispatch_rc": 1,
+            "dispatch_error": "CalledProcessError: git push"}
+    rows = ([dict(fail, ts=now - 3 * 86400) for _ in range(5)]      # before fix
+            + [dict(fail, ts=now - 3600 * i) for i in (3, 2, 1)])    # after
+    with tempfile.TemporaryDirectory() as tmp:
+        ops = a.audit_ops(_ops_repo(tmp, rows), now=now)
+    assert ops["present"] and ops["ticks"] == 3
+    assert ops["repeated_failures"] == [
+        {"signature": "execute: CalledProcessError: git push", "count": 3}]
+
+
+def test_ops_flags_duplicate_prs_after_cutoff():
+    now = _now()
+    rows = [{"ts": now - 7200, "kind": "propose", "dispatch_rc": 0,
+             "branch": "auto/coder/propose-g1-20261114-103050", "pr_url": "u/21"},
+            {"ts": now - 3600, "kind": "propose", "dispatch_rc": 0,
+             "branch": "auto/coder/propose-g1-20261114-110029", "pr_url": "u/22"}]
+    with tempfile.TemporaryDirectory() as tmp:
+        ops = a.audit_ops(_ops_repo(tmp, rows), now=now)
+    assert ops["duplicate_pr_tasks"] == [
+        {"task": "auto/coder/propose-g1", "prs": ["u/21", "u/22"]}]
+
+
+def test_ops_gaps_are_high_and_have_stable_ids():
+    ops = {"present": True, "code_cutoff": "t",
+           "repeated_failures": [{"signature": "s", "count": 4}],
+           "duplicate_pr_tasks": [{"task": "t", "prs": ["a", "b"]}]}
+    g1 = [g for g in a.derive_gaps(_clean_metrics(ops=ops)) if g["area"] == "ops"]
+    ops2 = dict(ops, repeated_failures=[{"signature": "other", "count": 9}])
+    g2 = [g for g in a.derive_gaps(_clean_metrics(ops=ops2)) if g["area"] == "ops"]
+    assert len(g1) == 2 and all(g["severity"] == "high" for g in g1)
+    # counts/signatures live in `detail`, so the id survives changing numbers
+    assert {g["gap_id"] for g in g1} == {g["gap_id"] for g in g2}
+
+
+def test_healthy_ops_and_old_rows_without_ops_add_no_gap():
+    assert not [g for g in a.derive_gaps(_clean_metrics()) if g["area"] == "ops"]
+    ok = {"present": True, "repeated_failures": [], "duplicate_pr_tasks": []}
+    assert not [g for g in a.derive_gaps(_clean_metrics(ops=ok)) if g["area"] == "ops"]
+
+
+def test_ci_not_observed_on_prs_is_a_gap_only_when_measured_false():
+    def ci_gaps(v):
+        ci = {"github_actions_present": True, "other_ci_detected": False,
+              "test_runs_on_pr": v}
+        return [g for g in a.derive_gaps(_clean_metrics(ci=ci))
+                if g["summary"] == "CI runs not observed on pull requests"]
+    assert len(ci_gaps(False)) == 1
+    assert not ci_gaps(True) and not ci_gaps(None)
+
+
+# --------------------------------------------------------------------------- #
 # History append round-trips
 # --------------------------------------------------------------------------- #
 def test_history_append_writes_a_jsonl_row():
