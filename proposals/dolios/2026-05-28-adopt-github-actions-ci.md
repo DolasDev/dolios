@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-05-28-adopt-github-actions-ci
-status: approved
+status: done
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L2@2026-05-28T21:17:28Z
 gap_ids:
@@ -19,7 +19,7 @@ frameworks:
   - "OpenSSF Scorecard: Pinned-Dependencies"
 opened:    2026-05-28
 approved:  null
-done:      null
+done:      2026-11-14
 ---
 
 # Adopt GitHub Actions CI (and make CI itself measurable)
@@ -326,16 +326,64 @@ test runners. Sources consulted are listed inline.
 
 ## Outcome
 
-> *TBD — appended after the re-measure step.*
+Post row: `.dolios/metrics/dolios/history.jsonl` last line, `audited_at:
+2026-11-14T09:00:59Z`. Baseline cited in the frontmatter above.
 
 | Metric | Baseline | Post-execution | Δ | Target | Verdict |
 |---|---|---|---|---|---|
-| `ci.github_actions_present` | `false` | TBD | TBD | `true` | TBD |
-| `ci.workflow_count` | `0` | TBD | TBD | `>= 1` | TBD |
-| `ci.test_runs_on_pr` | `null` | TBD | TBD | `true` | TBD |
-| `ci.median_runtime_seconds` | `null` | TBD | TBD | `< 300` | TBD |
-| `ci.success_rate_30d` *(new)* | n/a | TBD | TBD | `>= 0.80` | TBD |
+| `ci.github_actions_present` | `false` | `true` | `false → true` | `true` | ✅ met |
+| `ci.workflow_count` | `0` | `1` | `+1` | `>= 1` | ✅ met |
+| `ci.test_runs_on_pr` | `null` | `false` | `null → false` | `true` | ❌ miss |
+| `ci.median_runtime_seconds` | `null` | `15` | `null → 15s` | `< 300` | ✅ met |
+| `ci.success_rate_30d` *(new)* | n/a | `1.0` | n/a → `1.0` | `>= 0.80` | ✅ met |
+| `commits.median_lines_changed` *(guard)* | `114` | `50` | `−64` | no adverse >25% rise | ✅ ok (went down) |
+| `commits.count` *(guard)* | `27` | `9` | `−18` (−67%) | not materially down | ⚠️ down — see below |
 
-- **Did the hypothesis hold?** TBD.
-- **Unexpected movement** in guard metrics: TBD.
-- **What we learned**, for the next proposal of this kind: TBD.
+- **Did the hypothesis hold?** Mostly, but with one honest miss. CI exists and
+  is fast (15s median, 1.0 success rate) — the primary presence-and-shape arm
+  is met. The second arm (move `test_runs_on_pr` out of `not_measured`) moved
+  from `null` to a real boolean `false`, which is a *partial* flip:
+  measurement works, but the computed value is wrong because
+  `services/auditor/ci_api.py:_fetch_runs` passes `?branch=main` to the
+  Actions API — and pull_request-triggered runs are recorded under the PR's
+  HEAD branch, not main, so the filter excludes exactly the events the field
+  is supposed to detect. All runs returned are `push`-to-main events after
+  merges. Strict reading of the proposal's success threshold
+  (`test_runs_on_pr == true` after chunk 3): **miss**.
+- **Unexpected movement** in guard metrics:
+  - `commits.median_lines_changed`: 114 → 50. This is a *favorable* move
+    (DORA small-batches) and matches the autonomous-coder's one-chunk-per-PR
+    cadence; not attributable to CI gating.
+  - `commits.count` (90-day window): 27 → 9. This is a −67% drop and nominally
+    breaches the "CI shouldn't drop activity" guard. Confounder: the pre
+    window (Feb–May 2026) covered pre-autonomous-coder human development on
+    the repo; the post window (Aug–Nov 2026) is dominated by autonomous
+    chunks, which are deliberately smaller and less frequent per the fleet
+    policy. The drop is explained by regime change, not by CI gating (CI is
+    not blocking any PR — see the `test_runs_on_pr: false` finding above —
+    so it literally cannot be the cause). Not escalating to a follow-up,
+    but worth flagging.
+  - Anti-test ("has at least one PR been blocked by failing CI"): no evidence
+    organically; soft signal as the proposal allowed. The `test_runs_on_pr`
+    bug would mask this anyway.
+- **What we learned**, for the next proposal of this kind:
+  1. **Always dogfood the metric on a real run.** The `test_runs_on_pr`
+     calculation was unit-tested with a mocked payload in chunk 3, but no
+     one ran the auditor against a live repo with actual
+     pull_request-triggered runs before declaring the chunk done. The
+     `?branch=main` filter hid the bug from both the unit test (which
+     bypassed `_fetch_runs`) and the first audit (which ran before any PRs
+     had merged). Follow-up proposal should either drop `?branch=main` or
+     make two calls and merge. See
+     [[0003-gh-actions-api-branch-filter-hides-pr-runs]].
+  2. **Guard metrics need a confounder check.** The `commits.count` guard
+     was defined assuming a steady-state development regime; it fired on a
+     regime change (humans → autonomous coder) that had nothing to do with
+     CI. Next proposal should pair guards with a "what else could cause
+     this?" line rather than a bare threshold, or widen the window to
+     dilute regime effects.
+  3. **The hypothesis structure worked.** Splitting "CI exists" from
+     "CI is measured" let us land two measurable, independent outcomes —
+     and the partial failure is cleanly attributable to one of them without
+     muddying the other. Keep this two-arm structure for the coverage,
+     scorecard, gitleaks, and dependabot follow-ups.
