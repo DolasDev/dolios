@@ -153,12 +153,16 @@ ask-q:
 	@docker compose exec --user hermes -w /opt/data/repos/dolios \
 	  hermes-autonomous-coder hermes -p autonomous-coder chat -q "$(Q)"
 
-# Install the cron wrapper at the path `hermes cron --script` expects
-# (~/.hermes/scripts/), then register the schedule. One-time setup per host.
+# Install the cron wrapper at the path `hermes cron --script` expects.
+# hermes resolves `--script <name>` relative to the PROFILE dir, i.e.
+# ~/.hermes/profiles/autonomous-coder/scripts/ (in-container:
+# /opt/data/profiles/autonomous-coder/scripts/) — NOT the global
+# ~/.hermes/scripts/. One-time setup per host.
 install-coder-cron:
-	@mkdir -p $(HOME)/.hermes/scripts
-	@install -m 0755 infra/hermes/scripts/dolios-tick.sh $(HOME)/.hermes/scripts/dolios-tick.sh
-	@echo "Installed wrapper at $(HOME)/.hermes/scripts/dolios-tick.sh"
+	@mkdir -p $(HOME)/.hermes/profiles/autonomous-coder/scripts
+	@install -m 0755 infra/hermes/scripts/dolios-tick.sh \
+	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh
+	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh"
 	@echo "Now register the cron from inside the container:"
 	@echo "  docker compose exec --user hermes hermes-autonomous-coder hermes -p autonomous-coder cron create \\"
 	@echo "    '0,30 3-11 * * *' --no-agent --script dolios-tick.sh \\"

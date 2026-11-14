@@ -161,11 +161,16 @@ def _real_gate_decide(max_utilization: float, windows: dict | None) -> dict:
 
     Prefers per-window pacing when `windows` is configured (the nightly
     catch-up model); falls back to the flat `max_utilization` threshold.
+
+    `auto_refresh=True` is required: the dispatcher runs unattended from cron,
+    and the OAuth access token lives ~8h. Without it the gate fails closed on
+    every tick once the token lapses, and nothing in the cron path ever runs
+    `claude` to refresh it (this stalled the coder 2026-06-10 → 2026-11-14).
     """
     sys.path.insert(0, os.path.join(HERE, "..", "usage-gate"))
     try:
         import usage_gate
-        snapshot = usage_gate.gather(enrich=False)
+        snapshot = usage_gate.gather(enrich=False, auto_refresh=True)
         return usage_gate.decide(snapshot, max_utilization=max_utilization,
                                  windows=windows)
     except Exception as exc:  # gate unreachable / token expired → do not dispatch

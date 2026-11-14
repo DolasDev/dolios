@@ -72,5 +72,7 @@ terminal:
 #
 # `--no-agent` means the script IS the cron job — no LLM in the orchestration.
 # `dolios-tick.sh` lives at infra/hermes/scripts/dolios-tick.sh in this repo
-# and must be symlinked or copied into ~/.hermes/scripts/ on the host (see
-# `make install-coder-cron`). It just exec's `python3 .../tick.py`.
+# and must be installed at ~/.hermes/profiles/autonomous-coder/scripts/ on
+# the host — that's where `hermes cron --script <name>` resolves <name>, NOT
+# the global ~/.hermes/scripts/ (see `make install-coder-cron`). It just
+# exec's `python3 .../tick.py`.
