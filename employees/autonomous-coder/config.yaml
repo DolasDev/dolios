@@ -43,6 +43,14 @@ terminal:
   backend: "local"
   timeout: 180
 
+# hermes kills `--no-agent --script` cron jobs after 120s by default
+# (cron/scheduler.py _DEFAULT_SCRIPT_TIMEOUT). An execute tick runs Claude Code
+# for ~5-10 min, so the default killed tick.py mid-chunk and orphaned the
+# dispatch (2026-11-14 07:00Z). 1500s stays under the 30-min tick spacing so
+# ticks can't overlap.
+cron:
+  script_timeout_seconds: 1500
+
 # The nightly catch-up loop. The dispatcher (services/coder/dispatch.py) enforces
 # gate + allowlist + branch + PR-not-merge in code; the supervisor just picks a
 # task per tick. Left COMMENTED until token-refresh + an allowlisted repo land
