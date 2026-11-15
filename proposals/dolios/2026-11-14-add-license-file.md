@@ -84,7 +84,7 @@ proposal that had to flip measurement itself.
 
 One execution-PR-sized chunk. One file, ~15 lines.
 
-- [ ] **Add `LICENSE` at repo root with the Apache License 2.0 text.**
+- [x] **Add `LICENSE` at repo root with the Apache License 2.0 text.**
    - Path: `LICENSE` (bare, no extension — matches both GitHub's license
      detection and `audit_docs()`'s first branch).
    - Content: the **verbatim, unmodified** Apache License 2.0 text as
