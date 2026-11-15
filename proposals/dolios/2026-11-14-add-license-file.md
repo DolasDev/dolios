@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-11-14-add-license-file
-status: approved
+status: done
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L5@2026-11-14T09:00:59Z
 gap_ids:
@@ -11,7 +11,7 @@ frameworks:
   - "NIST SSDF: PO.1 — define the security & compliance requirements"
 opened:    2026-11-14
 approved:  2026-11-14
-done:      null
+done:      2026-11-15
 ---
 
 # Add an explicit Apache-2.0 LICENSE (Dolas LLC)
@@ -216,12 +216,48 @@ choosealicense.com directories for each.
 
 ## Outcome
 
-> *TBD — appended after the re-measure step.*
+Re-measured 2026-11-15T03:30:56Z (history.jsonl line 7) against the cited
+PRE row 2026-11-14T09:00:59Z (line 5).
 
 | Metric | Baseline | Post-execution | Δ | Target | Verdict |
 |---|---|---|---|---|---|
-| `docs.license_present` | `false` | *(tbd)* | *(tbd)* | `true` | *(tbd)* |
+| `docs.license_present` | `false` | `true` | `false → true` | `true` | **met** |
+| `gaps[gap_id=compliance-f6003ab812]` *(guard)* | present | absent | present → absent | absent | **met** |
 
-- **Did the hypothesis hold?** *(tbd)*
-- **Unexpected movement** in other metrics (intended or otherwise). *(tbd)*
-- **What we learned**, for the next proposal of this kind. *(tbd)*
+- **Did the hypothesis hold?** Yes, cleanly. `docs.license_present` flipped
+  to `true` and the `compliance-f6003ab812` gap no longer appears in the
+  post row's `gaps:` array — the two conditions the Measurement plan
+  required, both satisfied. Chunk 1 (`#33`) added `LICENSE` (verbatim
+  Apache-2.0) and `NOTICE` ("dolios / Copyright 2026 Dolas LLC") at repo
+  root; `services/auditor/audit.py`'s `audit_docs()` matched `LICENSE`
+  (bare, no extension) on the first try and `derive_gaps()` dropped the
+  entry as expected.
+- **Unexpected movement** in other metrics: none attributable to this PR.
+  Other fields that moved between PRE and POST
+  (`commits.count 9 → 21`, `shape.total_tracked_files 73 → 83`,
+  `testing.test_files 8 → 9`, `ci.median_runtime_seconds 15 → 17`, new
+  `ops.*` block) all trace to concurrent merges that landed between the
+  PRE audit (2026-11-14T09:00:59Z) and the POST audit — the
+  `sync-base-before-picking-work` chunks (#28, #30, #31), the `ops`-gap
+  auditor work (#26), and the approval commit for this proposal itself
+  (#32). The proposal's "no plausible causal path from LICENSE presence
+  to any other field" prediction holds; the shape-count delta of ~10
+  tracked files far exceeds the 2 (`LICENSE` + `NOTICE`) this chunk
+  added, which is consistent with the parallel work. Note the
+  `ops.code_cutoff = 2026-11-14T16:51:45Z` with `ops.ticks = 1` — see
+  [[0004-ops-cutoff-resets-on-loop-code-merge]]; `ops.*` fields are
+  effectively unmeasurable in this window, but this proposal's metrics
+  are unrelated to `ops.*` so that's not a problem here.
+- **What we learned.** Single-file compliance-area proposals with a
+  filesystem-presence metric are the easy case: PRE/POST maps 1:1 to a
+  commit, there is no measurement window to wait out, and the auditor's
+  detection check is stable enough that "add the file, flip the metric"
+  is the whole story. The absence-of-guards prediction from the
+  Measurement plan was correct — if a future proposal of this shape
+  wants to be defensive, the shape of the guard is "no other
+  `docs.*`/`compliance`-area gap appeared", which is what the gap-array
+  check already covers transitively. No new falsifiability lesson; the
+  hypothesis was a near-tautology (presence check against a stable
+  filesystem probe), which is exactly why it was picked as a
+  low-friction unblock for the subsequent `compliance`/`docs.*`
+  proposals (SECURITY.md, CODEOWNERS).
