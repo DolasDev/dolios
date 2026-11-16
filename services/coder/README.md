@@ -92,6 +92,34 @@ hermes-agent (local model, supervisor — drives the loop, mechanically)
 All effects go through injectable `Runners`, so guardrails are unit-tested with
 fakes — no real git/claude/gh/network. See `test_dispatch.py` (9 tests).
 
+## Human approvals over Matrix (`approvals.py`)
+
+Proposals land as `status: proposed`; only a human approves them. At 13:00 UTC
+(7am Central) the `dolios-approvals-digest` cron sends one Matrix message to
+`MATRIX_ALERT_ROOM` listing every pending proposal with its `pitch:` (2–3
+plain sentences, written at propose time). Steve answers in the same room:
+
+| Reply | Effect |
+|---|---|
+| `approve <name>` | PR flipping `status: approved` (+ decision note), auto-merges on green CI |
+| `park <name>` | Hidden from future digests; stays `proposed`, so its gap stays covered |
+| `abandon <name>` | PR flipping `status: abandoned`; the gap becomes eligible for a new proposal |
+| anything else | The hermes chat agent discusses the proposal (benefits, risk, effort) |
+
+`<name>` is any unique substring of the slug. The chat agent runs
+`approvals.py decide <name> <verb>`. That command does not trust the model:
+it re-reads the room and needs a message **from a `MATRIX_ALLOWED_USERS`
+account**, under 30 min old and not used for an earlier decision, that
+literally says `<verb> <name>` and resolves to the same proposal. Decision
+PRs are made through the GitHub API, so the shared checkout is never touched.
+Local state (`parked`, last digest, used event ids) lives in
+`.dolios/approvals-state.json`.
+
+```sh
+python3 services/coder/approvals.py digest --dry-run   # preview
+python3 services/coder/approvals.py list
+```
+
 ## Status (ROADMAP Phase 3)
 
 - ✅ Dispatcher + guardrails + tests (`dispatch.py`).

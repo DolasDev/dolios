@@ -9,6 +9,11 @@ metrics:
   - docs.codeowners_present
 frameworks:
   - "DORA: Streamlining change approval"
+pitch: >-
+  Adds a CODEOWNERS file so GitHub automatically requests your review on
+  every PR. With you as the only maintainer it mostly checks an audit box;
+  it matters once a second person (or bot) starts reviewing. One small
+  file, very low risk.
 opened:    2026-11-15
 approved:  null
 done:      null

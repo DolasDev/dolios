@@ -17,6 +17,11 @@ metrics:                      # which metrics from the audit this targets
 frameworks:                   # at least one — see docs/metrics.md
   - "DORA: <capability>"
   - "OpenSSF Scorecard: <check>"
+# pitch: 2–3 plain-English sentences for the human approver, shown verbatim
+# in the morning Matrix digest. What changes, why it matters, effort/risk.
+# No metric ids or jargon.
+pitch: >-
+  <what changes, why it matters, effort/risk>
 opened:    YYYY-MM-DD
 approved:  null               # date the proposal PR merged
 done:      null               # date the outcome was appended

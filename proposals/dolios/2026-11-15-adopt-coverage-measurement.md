@@ -10,6 +10,12 @@ metrics:
   - testing.coverage_percent
 frameworks:
   - "DORA: Test automation"
+pitch: >-
+  Runs the test suite under coverage.py in CI and teaches the auditor to
+  read the result, so the loop can see how much of the code its tests
+  actually exercise. That turns "tests exist" into a real number the coder
+  can improve over time. Three chunks touching CI and the auditor;
+  moderate effort, low risk.
 opened:    2026-11-15
 approved:  null
 done:      null
