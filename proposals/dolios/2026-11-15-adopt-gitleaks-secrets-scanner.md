@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-11-15-adopt-gitleaks-secrets-scanner
-status: proposed
+status: approved
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L7@2026-11-15T03:30:56Z
 gap_ids:
@@ -11,11 +11,13 @@ frameworks:
   - "DORA: Shift-left security"
   - "OpenSSF Scorecard: Token-Permissions / Pinned-Dependencies"
 opened:    2026-11-15
-approved:  null
+approved:  2026-11-16
 done:      null
 ---
 
 # Adopt gitleaks with a tuned config, a CI job, and a pre-commit hook
+
+> **Decision (human, 2026-11-16): approved.** The repo is public, so secret scanning is the highest-value control in this batch. Per memory 0005, use `gitleaks/gitleaks-action@v3`, not v2.
 
 ## Hypothesis
 

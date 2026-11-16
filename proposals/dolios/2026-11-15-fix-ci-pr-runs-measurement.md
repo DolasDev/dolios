@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-11-15-fix-ci-pr-runs-measurement
-status: proposed
+status: approved
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L7@2026-11-15T03:30:56Z
 gap_ids:
@@ -13,11 +13,13 @@ frameworks:
   - "DORA: Continuous Integration"
   - "OpenSSF Scorecard: CI-Tests"
 opened:    2026-11-15
-approved:  null
+approved:  2026-11-16
 done:      null
 ---
 
 # Drop the `branch=main` filter so the auditor can see PR-triggered CI runs
+
+> **Decision (human, 2026-11-16): approved.** Cheapest of the batch and it fixes the auditor's own blind spot, which makes every later CI measurement trustworthy.
 
 ## Hypothesis
 
