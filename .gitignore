@@ -52,3 +52,4 @@ Thumbs.db
 .dolios/tick-log.jsonl
 # loop watchdog alert-dedupe state (services/coder/watchdog.py)
 .dolios/watchdog-state.json
+.dolios/approvals-state.json

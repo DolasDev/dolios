@@ -10,6 +10,11 @@ metrics:
 frameworks:
   - "OpenSSF Scorecard: Security-Policy"
   - "NIST SSDF: PO.1 — define the security & compliance requirements"
+pitch: >-
+  Adds a SECURITY.md telling outsiders how to report a vulnerability
+  privately and how fast you'll respond. The repo is public, so this gives
+  anyone who finds a hole a private reporting path instead of a public
+  issue. One file; you'd need to pick the contact address it publishes.
 opened:    2026-11-15
 approved:  null
 done:      null

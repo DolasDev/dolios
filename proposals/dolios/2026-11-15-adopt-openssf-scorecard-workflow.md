@@ -10,6 +10,12 @@ metrics:
 frameworks:
   - "OpenSSF Scorecard"
   - "NIST SSDF: PO.1"
+pitch: >-
+  Adds the OpenSSF Scorecard GitHub workflow, which scores the repo weekly
+  on about 18 security practices (branch protection, pinned actions, and
+  so on) and publishes the result. It replaces several one-off yes/no
+  audit checks with one trend line. One workflow file, but it publishes a
+  public score and needs your merge (.github/).
 opened:    2026-11-15
 approved:  null
 done:      null

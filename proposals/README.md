@@ -39,6 +39,11 @@ done:      null
 
 ### Field semantics
 
+- **`pitch`** — 2–3 plain-English sentences for the human approver. The
+  morning Matrix digest (`services/coder/approvals.py digest`) shows it
+  verbatim; replying `approve <name>` / `park <name>` / `abandon <name>`
+  in that room applies the decision (see `services/coder/README.md`).
+
 - **`id`** — canonical identifier, format `<repo>/<filename-stem>` (no `.md`).
   Written explicitly so renaming the file doesn't orphan execution PRs that
   cite it. The dispatcher tags every execution PR and branch with this id.
@@ -56,7 +61,7 @@ done:      null
 | State | Set by | What it means |
 |---|---|---|
 | `proposed` | the audit + Claude-Code research step | PR opened with the proposal body. Awaits human review. |
-| `approved` | **human** (merging the proposal PR) | Plan accepted; execution PRs may now be opened against it. |
+| `approved` | **human** (merging the proposal PR, or replying `approve <name>` to the Matrix digest) | Plan accepted; execution PRs may now be opened against it. |
 | `implementing` | the dispatcher (when it opens an execution PR linked to this proposal) | At least one execution PR has been opened (open or in-review). |
 | `done` | the re-measure step (after execution PR(s) merge + follow-up audit) | Outcome row appended to the proposal; status flipped; metrics moved (or didn't — both honest outcomes). |
 | `abandoned` | **human** | Reviewed and decided not to pursue. The reason goes in the file before flipping the status. |

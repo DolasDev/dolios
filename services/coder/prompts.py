@@ -267,10 +267,18 @@ gap_ids:
   - {gap_id}
 metrics: [...]
 frameworks: [...]
+pitch: >-
+  <2–3 plain-English sentences for the human approver, read on a phone:
+  what changes, why it is worth doing for THIS repo, and the effort/risk
+  (say "needs your merge" if it touches .github/ or other protected paths).
+  No metric ids, file:line refs, or framework jargon.>
 opened:    {today}
 approved:  null
 done:      null
 ```
+
+The `pitch:` is what the human sees in the morning Matrix digest before
+deciding — write it for them, not for the auditor.
 
 # Output
 

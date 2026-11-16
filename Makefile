@@ -167,6 +167,8 @@ install-coder-cron:
 	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh
 	@install -m 0755 infra/hermes/scripts/dolios-watchdog.sh \
 	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-watchdog.sh
+	@install -m 0755 infra/hermes/scripts/dolios-approvals-digest.sh \
+	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-approvals-digest.sh
 	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh"
 	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-watchdog.sh"
 	@echo "Now register the cron from inside the container:"
@@ -177,3 +179,7 @@ install-coder-cron:
 	@echo "  docker compose exec --user hermes hermes-autonomous-coder hermes -p autonomous-coder cron create \\"
 	@echo "    '15 * * * *' --no-agent --script dolios-watchdog.sh \\"
 	@echo "    --name dolios-coder-watchdog --workdir /opt/data/repos/dolios"
+	@echo "and the morning approvals digest (13:00 UTC = 7am Central):"
+	@echo "  docker compose exec --user hermes hermes-autonomous-coder hermes -p autonomous-coder cron create \\"
+	@echo "    '0 13 * * *' --no-agent --script dolios-approvals-digest.sh \\"
+	@echo "    --name dolios-approvals-digest --workdir /opt/data/repos/dolios"
