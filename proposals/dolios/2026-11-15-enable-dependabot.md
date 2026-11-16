@@ -1,6 +1,6 @@
 ---
 id:     dolios/2026-11-15-enable-dependabot
-status: proposed
+status: approved
 repo:   dolios
 audit:  .dolios/metrics/dolios/history.jsonl#L7@2026-11-15T03:30:56Z
 gap_ids:
@@ -11,11 +11,13 @@ frameworks:
   - "DORA: Shift-left security"
   - "OpenSSF Scorecard: Dependency-Update-Tool"
 opened:    2026-11-15
-approved:  null
+approved:  2026-11-16
 done:      null
 ---
 
 # Enable Dependabot with a grouped, weekly config for github-actions and pip
+
+> **Decision (human, 2026-11-16): approved, with two amendments to Chunk 1.** (1) The `github-actions` stanza MUST use `directory: "/"`; Dependabot looks for workflows in `<directory>/.github/workflows`, so pointing it at `.github/workflows/` scans a path that doesn't exist (lesson from the superseded PR #38). (2) Use `timezone: "America/Chicago"`, the maintainer's timezone. Touches `.github/`, so the execution PR is held for a human merge.
 
 ## Hypothesis
 
@@ -112,7 +114,8 @@ code changes, no new dependencies.
    - **`version: 2`** at the top — version 1 has been deprecated since
      2020 and is the most common "copy-pasted from a stale guide"
      failure mode.
-   - **Ecosystem 1 — `github-actions`.** Scan the `.github/workflows/`
+   - **Ecosystem 1 — `github-actions`, `directory: "/"`** (never
+     `.github/workflows/` — see Decision note). Scan the `.github/workflows/`
      tree for action references and open a PR when a newer version is
      released. This is where the config *immediately* earns its keep:
      `.github/workflows/ci.yml` already pins
@@ -137,7 +140,7 @@ code changes, no new dependencies.
      (ship pip-less, add it in the follow-up proposal that declares
      deps); on balance we include it.
    - **Schedule:** `interval: "weekly"`, `day: "monday"`, `time:
-     "06:00"`, `timezone: "America/New_York"` — align with when the
+     "06:00"`, `timezone: "America/Chicago"` — align with when the
      dispatcher's audit cron already runs, so a maintainer reviewing
      Monday-morning PRs sees the fresh audit row and the fresh
      Dependabot PRs in the same session. Not daily — the gap's
