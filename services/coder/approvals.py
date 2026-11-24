@@ -72,7 +72,11 @@ def _real_runner(cmd: list[str], cwd: Path, stdin: str | None = None
 # Proposal loading
 # --------------------------------------------------------------------------- #
 def split_frontmatter(text: str) -> tuple[dict, str]:
-    import yaml
+    try:
+        import yaml
+    except ImportError:
+        sys.exit("ERROR: pyyaml missing — run this via "
+                 "/opt/data/profiles/autonomous-coder/scripts/dolios-approvals.sh")
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---\n", 4)
@@ -471,7 +475,8 @@ def cmd_decide(args, *, root: Path, state_path: Path, runner: Runner,
         print(f"ERROR: `{p['slug']}` is `{p['status']}`, not `proposed` — nothing to do")
         return 2
     if matrix is None:
-        print("ERROR: Matrix env missing — cannot verify the human's command")
+        print("ERROR: Matrix env missing — cannot verify the human's command "
+              "(run via /opt/data/profiles/autonomous-coder/scripts/dolios-approvals.sh)")
         return 2
     state = load_state(state_path)
     consumed = set(state.get("consumed_events", []))

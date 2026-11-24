@@ -26,6 +26,10 @@ agent:
   max_turns: 90
   tool_use_enforcement: "auto"
   reasoning_effort: "medium"
+  # Chat agent must never write to the shared checkout (2026-11-16 incident:
+  # it hand-patched approvals.py + a proposal and blocked the loop for a week).
+  # Removes write_file/patch/read_file/search_files; terminal stays for scripts.
+  disabled_toolsets: [file]
 
 # Guardrail: require human approval rather than acting unattended until the
 # Phase 3 guardrails (branch+PR, allowlist, budget) are in place.

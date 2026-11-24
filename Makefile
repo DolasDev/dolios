@@ -169,6 +169,8 @@ install-coder-cron:
 	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-watchdog.sh
 	@install -m 0755 infra/hermes/scripts/dolios-approvals-digest.sh \
 	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-approvals-digest.sh
+	@install -m 0755 infra/hermes/scripts/dolios-approvals.sh \
+	  $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-approvals.sh
 	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-tick.sh"
 	@echo "Installed wrapper at $(HOME)/.hermes/profiles/autonomous-coder/scripts/dolios-watchdog.sh"
 	@echo "Now register the cron from inside the container:"
