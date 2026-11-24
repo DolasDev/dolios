@@ -59,6 +59,15 @@ DUP_WINDOW_S = 48 * 3600
 STALE_S = 18 * 3600
 NO_PROGRESS_S = 7 * 24 * 3600
 REALERT_S = 24 * 3600
+
+# The loop shares its checkout with the host; an uncommitted edit there (a
+# human's, or the chat agent's — see 2026-11-16) blocks every tick's sync.
+# Say exactly what to do, since the raw signature reads like noise.
+FOREIGN_DIRT_HINT = (
+    "\n→ The loop is BLOCKED: someone edited files in the shared checkout "
+    "and nothing runs until they're committed or reverted. On the host: "
+    "`git -C ~/repos/dolios status` / `git diff`, then commit them on a "
+    "branch or `git checkout -- <files>`.")
 TAIL_ROWS = 500
 
 # Holds that are the gate doing its job (pacing / budget), not a fault.
@@ -146,11 +155,11 @@ def evaluate(rows: list[dict], now: float, *, check_stale: bool = True) -> list[
             if failure_signature(r) != sigs[0]:
                 break
             streak += 1
-        findings.append({
-            "key": _key("repeat", sigs[0]),
-            "message": (f"last {streak} ticks failed the same way "
-                        f"(since {rows[-streak].get('iso')}): {sigs[0]}"),
-        })
+        message = (f"last {streak} ticks failed the same way "
+                   f"(since {rows[-streak].get('iso')}): {sigs[0]}")
+        if "foreign dirt" in sigs[0]:
+            message += FOREIGN_DIRT_HINT
+        findings.append({"key": _key("repeat", sigs[0]), "message": message})
 
     # duplicate
     by_task: dict[str, list[dict]] = {}

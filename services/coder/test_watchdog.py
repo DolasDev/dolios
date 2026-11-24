@@ -75,6 +75,15 @@ def test_repeat_fires_after_three_identical_failures():
     assert any(k.startswith("repeat:") for k in keys)
 
 
+def test_foreign_dirt_repeat_says_how_to_unblock():
+    dirt = "foreign dirt blocks sync: ['services/coder/approvals.py']"
+    rows = [audit_ok(T0)] + [{"ts": T0 + i * H, "iso": f"t{i}", "kind": "sync_error",
+                              "error": dirt} for i in range(1, 4)]
+    msgs = [f["message"] for f in w.evaluate(rows, T0 + 4 * H)
+            if f["key"].startswith("repeat:")]
+    assert msgs and "BLOCKED" in msgs[0] and "git checkout --" in msgs[0], msgs
+
+
 def test_repeat_needs_the_same_signature():
     rows = [hold(T0, TOKEN_HOLD), hold(T0 + H, TOKEN_HOLD),
             {"ts": T0 + 2 * H, "kind": "execute", "dispatch_rc": 1,
