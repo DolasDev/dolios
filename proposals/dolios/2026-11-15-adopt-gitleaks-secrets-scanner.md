@@ -133,7 +133,7 @@ for any reason, the proposal has still moved the audit.
      no scripts. The chunk is a two-file add (the `.gitleaks.toml` plus
      the `[x]` flip in the proposal), nothing else.
 
-- [ ] **Chunk 2 — Add a gitleaks CI job via a dedicated workflow
+- [x] **Chunk 2 — Add a gitleaks CI job via a dedicated workflow
       `.github/workflows/gitleaks.yml`.**
    - Separate workflow file (not a job in `ci.yml`) for two reasons:
      (1) the existing `ci.yml` runs a Python test matrix with a specific
