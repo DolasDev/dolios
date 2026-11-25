@@ -440,20 +440,28 @@ def open_decision_pr(p: dict, verb: str, note: str | None, *, root: Path,
     _gh_json(runner, root, [f"repos/{nwo}/git/refs", "-X", "POST",
                             "-f", f"ref=refs/heads/{branch}", "-f", f"sha={head}"])
     label = "approve" if verb == "approve" else "abandon"
-    _gh_json(runner, root, [f"repos/{nwo}/contents/{p['path']}"], stdin=json.dumps({
-        "message": f"proposal({p['repo']}): {label} {p['slug']}\n\n"
-                   f"Human decision sent over Matrix.",
-        "content": base64.b64encode(new_text.encode()).decode(),
-        "sha": cur["sha"], "branch": branch,
-    }))
-    rc, url, err = runner(["gh", "pr", "create", "--repo", nwo, "--base", "main",
-                           "--head", branch,
-                           "--title", f"proposal({p['repo']}): {label} {p['slug']}",
-                           "--body", f"Human decision ({verb}) sent over Matrix for "
-                                     f"`{p['path']}`." + (f"\n\nNote: {note}" if note else "")],
-                           root)
-    if rc != 0:
-        raise RuntimeError(f"gh pr create failed: {(err or url).strip()[:300]}")
+    try:
+        # PUT is required: `gh api --input` defaults to POST, which the
+        # contents endpoint answers with a misleading 404 (2026-11-25).
+        _gh_json(runner, root, [f"repos/{nwo}/contents/{p['path']}", "-X", "PUT"],
+                 stdin=json.dumps({
+                     "message": f"proposal({p['repo']}): {label} {p['slug']}\n\n"
+                                f"Human decision sent over Matrix.",
+                     "content": base64.b64encode(new_text.encode()).decode(),
+                     "sha": cur["sha"], "branch": branch,
+                 }))
+        rc, url, err = runner(["gh", "pr", "create", "--repo", nwo, "--base", "main",
+                               "--head", branch,
+                               "--title", f"proposal({p['repo']}): {label} {p['slug']}",
+                               "--body", f"Human decision ({verb}) sent over Matrix for "
+                                         f"`{p['path']}`." + (f"\n\nNote: {note}" if note else "")],
+                               root)
+        if rc != 0:
+            raise RuntimeError(f"gh pr create failed: {(err or url).strip()[:300]}")
+    except RuntimeError:
+        # Don't leave a half-made branch behind for the next attempt.
+        runner(["gh", "api", f"repos/{nwo}/git/refs/heads/{branch}", "-X", "DELETE"], root)
+        raise
     url = url.strip().splitlines()[-1]
     rc, out, err = runner(["gh", "pr", "merge", url, "--auto", "--squash",
                            "--delete-branch"], root)

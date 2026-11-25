@@ -176,6 +176,7 @@ class FakeRunner:
 
     def __init__(self, fs):
         self.fs, self.calls, self.put = fs, [], None
+        self.fail_put, self.deleted = False, []
 
     def __call__(self, cmd, cwd, stdin=None):
         self.calls.append(cmd)
@@ -198,8 +199,15 @@ class FakeRunner:
             if path.endswith("git/refs"):
                 return 0, "{}", ""
             if "--input" in cmd:
+                # Mirror GitHub: anything but PUT on contents is a 404.
+                method = cmd[cmd.index("-X") + 1] if "-X" in cmd else "POST"
+                if method != "PUT" or self.fail_put:
+                    return 1, "", "gh: Not Found (HTTP 404)"
                 self.put = json.loads(stdin)
                 return 0, "{}", ""
+            if "-X" in cmd and cmd[cmd.index("-X") + 1] == "DELETE":
+                self.deleted.append(path)
+                return 0, "", ""
         if cmd[:3] == ["gh", "pr", "create"]:
             return 0, "https://github.com/Org/repo/pull/99\n", ""
         if cmd[:3] == ["gh", "pr", "merge"]:
@@ -207,10 +215,11 @@ class FakeRunner:
         return 1, "", f"unexpected {cmd}"
 
 
-def run_decide(argv, events, fs=None):
+def run_decide(argv, events, fs=None, fail_put=False):
     fs = fs or files(proposal("add-security-md"),
                      proposal("adopt-gitleaks-secrets-scanner", chunks=3))
     runner = FakeRunner(fs)
+    runner.fail_put = fail_put
     mx = FakeMatrix(events)
     with tempfile.TemporaryDirectory() as d:
         sp = Path(d) / "state.json"
@@ -230,6 +239,14 @@ def test_decide_approve_opens_pr_and_consumes_event():
         "proposal/approve-adopt-gitleaks-secrets-scanner-")
     assert any(c[:3] == ["gh", "pr", "merge"] and "--auto" in c for c in r.calls)
     assert state["consumed_events"] == ["$go"]
+
+
+def test_decide_failed_write_deletes_branch_and_keeps_event():
+    rc, r, state = run_decide(["security", "abandon"],
+                              [msg(STEVE, "abandon security", eid="$a")], fail_put=True)
+    assert rc == 1 and r.put is None
+    assert len(r.deleted) == 1 and "proposal/abandon-add-security-md-" in r.deleted[0]
+    assert "consumed_events" not in state      # human can simply resend
 
 
 def test_decide_refuses_without_human_command():
