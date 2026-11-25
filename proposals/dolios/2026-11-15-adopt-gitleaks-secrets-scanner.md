@@ -103,7 +103,7 @@ the metric; chunks 2–3 deliver the enforcement the gap's `proposed_action`
 asked for. Each chunk is independently useful — if chunks 2 or 3 stall
 for any reason, the proposal has still moved the audit.
 
-- [ ] **Chunk 1 — Add `.gitleaks.toml` at repo root with tuned defaults
+- [x] **Chunk 1 — Add `.gitleaks.toml` at repo root with tuned defaults
       and an allowlist for this repo's placeholders.**
    - Path: **`.gitleaks.toml`** (bare, dotfile at repo root — case-sensitive
      on Linux). `services/auditor/audit.py:292` matches exactly

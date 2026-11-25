@@ -1,0 +1,33 @@
+# gitleaks >= v8.30
+#
+# Tunes gitleaks for this repo. The rule set is the upstream default
+# (extend.useDefault = true); only the allowlist is local to Dolios.
+#
+# See services/auditor/audit.py:292 — the auditor flips
+# `security.gitleaks_config_present` on the presence of this file at repo
+# root. The CI job and pre-commit hook that actually *run* gitleaks are
+# wired up in subsequent chunks of the same proposal.
+
+title = "dolios gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "repo-local allowlist for known placeholders and auditor fixtures"
+
+paths = [
+    '''^\.env\.example$''',
+    '''^employees/.*/env\.example$''',
+    '''^services/auditor/(audit|test_audit)\.py$''',
+]
+
+stopwords = [
+    "changeme",
+    "example",
+    "placeholder",
+]
+
+regexes = [
+    '''(?i)CHANGEME''',
+]
